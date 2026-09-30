@@ -11,6 +11,8 @@ Explain the opponent's threat, what the played move allows, a checked alternativ
 
 Use explicit sessionId and expectedRevision for mutations. A tool commit does not prove the mounted board displayed it. Read the matching live-view acknowledgement; don't claim display until acknowledged. Context update acknowledgement confirms host acceptance, not model consumption. If the position changes during a reply, identify the revision explained.
 
-Retries hide answers until an attempt and record hints/exposure; comparable sound alternatives count. Retry never changes the played-game score. Ground recurrence and progress in real analyzed games and comparable time controls. The fixture is verification data, not Brian's history.
+Use list_games and refresh_games for an explicit or remembered username, select_game for the chosen game, and analyze_game to start or resume its frozen local analysis. Use get_position_evidence and check_candidate for checked threats, continuations, and alternatives before explaining them. Use go_to_move, show_variation, and return_to_game for visible demonstrations on the same explicit session.
+
+Use start_retry for an analyzed player move. Set answerPreviouslyShown:true if this conversation has already explained or demonstrated that answer; free-text disclosure cannot be detected by the backend. Use submit_retry and retry_hint with the current attemptRevision. Never disclose checked answers from hidden retry context. Retries hide answers until an attempt and record hints/exposure; comparable sound alternatives count. Retry never changes the played-game score. Ground recurrence and progress in real analyzed games and comparable time controls. The fixture is verification data, not Brian's history.
 
 This plugin makes no model API calls; coaching uses the signed-in native Codex subscription and remains subject to its limits.

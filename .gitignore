@@ -2,5 +2,9 @@ node_modules/
 .runtime/
 chess-review/server/
 chess-review/ui.html
+chess-review/source/
+chess-review/LICENSE
+chess-review/THIRD-PARTY-NOTICES.md
+chess-review/licenses/
 artifacts/*.zip
 .DS_Store

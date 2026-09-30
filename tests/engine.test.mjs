@@ -1,7 +1,16 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { Engine, replayPosition, ENGINE_PROFILE } from '../src/engine.mjs';
+import { Engine, replayPosition, ENGINE_PROFILE, selectCompletedEvidence } from '../src/engine.mjs';
 const engine = new Engine();
+test('completed exact iteration can survive a final bound only for the same legal root move', () => {
+  const lastExact = { exact: true, cp: 30, depth: 15, nodes: 90_000, pv: ['e2e4','e7e5'] };
+  const last = { exact: false, bound: 'lowerbound', cp: 50, depth: 16, nodes: 100_010, pv: ['e2e4'] };
+  const selected = selectCompletedEvidence({ last, lastExact, bestMove: 'e2e4' });
+  assert.equal(selected.ready, true); assert.equal(selected.cp, 30); assert.equal(selected.depth, 15); assert.equal(selected.nodes, 90_000);
+  assert.equal(selected.searchedNodes, 100_010); assert.equal(selected.finalPartialIteration.bound, 'lowerbound');
+  assert.equal(selectCompletedEvidence({ last, lastExact, bestMove: 'd2d4' }).ready, false);
+  assert.equal(selectCompletedEvidence({ last, lastExact: null, bestMove: 'e2e4' }).ready, false);
+});
 test('pinned actual Stockfish produces repeatable legal white-oriented evidence', async () => {
   const a = await engine.analyze({ moves: ['e2e4','e7e5','d1h5','b8c6','f1c4','g8f6'] });
   const b = await engine.analyze({ moves: ['e2e4','e7e5','d1h5','b8c6','f1c4','g8f6'] });

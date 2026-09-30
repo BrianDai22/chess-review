@@ -1,29 +1,44 @@
 # Chess Review
 
-A local Codex plugin for reviewing completed Chess.com games beside native subscription-powered coaching. Development is in progress; the first version is **not yet complete**.
+A local Codex plugin for reviewing completed Chess.com games beside native coaching. Import a username, choose a game, analyze it with pinned Stockfish, and discuss or retry decisions on the same board. The board uses Chessground with bundled SVG pieces; the plugin uses a pawn icon.
 
-The initial plugin has rendered a fixture board in the installed desktop host, persisted review sessions in SQLite, and published acknowledged selected-position context. Native model consumption, visible semantic changes, and remount/isolation still need live verification. Computer-use inspection was stopped during that check. The board now uses Lichess Chessground with SVG pieces and a matching pawn plugin icon; its updated native appearance still needs inspection. The full review, import picker, canonical game-analysis orchestration, and retry workflow are not connected yet.
+One SQLite backend owns original PGNs, positions, scoring, sessions, and retry history. Accuracy follows the documented independent Lichess-based method, so numbers can differ from Chess.com. Coaching uses the existing signed-in Codex subscription; this application makes no model inference API calls or requests a model API key.
 
-Independent modules implement public username import, caching/deduplication/error preservation, Stockfish analysis, and documented Lichess-based scoring. No model API keys or separately billed model inference calls are used. The verification fixture is not a user's game history.
+## Install or update on this Mac
 
-## Development
-
-Node.js 24 or newer is required. Install the exact lockfile dependencies and run:
+Requirements: macOS, Node.js 24 or newer, and Codex desktop installed as `/Applications/ChatGPT.app`.
 
 ```sh
 npm ci --ignore-scripts
-npm test
-npm run build
+npm run install:local
 ```
 
-The build writes a self-contained `chess-review/` package containing its MCP server and embedded HTML resource. Engine tests need the pinned Stockfish binary described in [the benchmark](docs/engine-benchmark.md). Engine binaries are excluded from Git. See [scoring](docs/scoring-v1.md), [import and storage](docs/import.md), and [host integration findings](docs/host-sdk-findings.md) for evidence and limits.
+The installer obtains and verifies the pinned official Stockfish release, retains its corresponding source and license, builds the self-contained package, preserves existing personal-marketplace entries, and runs the bundled CLI's `plugin add chess-review@personal`. A fresh package version is generated for each install. `CHESS_REVIEW_CODEX_CLI` can override the CLI path.
 
-## Data and installation
+Open **Plugins → Chess Review → Open plugin**, or its **Review Board** sidebar entry. Existing chats and mounted boards can retain a previous tool/resource snapshot. After an update, start a fresh native chat mentioning Chess Review and ask it to reopen your saved session. The session ID is in the attached review context; the saved position and history survive updates. Edit this repository and rerun the install command to update. Do not edit the installed cache.
 
-Learning data lives outside the plugin cache in `~/Library/Application Support/Chess Review/chess-review.sqlite`. `CHESS_REVIEW_DATA_DIR` can select a disposable verification store. Keep this database private; it is not part of this repository. Original PGNs remain separate from explored variations.
+## Use
 
-The current local package uses portable root manifests and a synchronized Codex compatibility overlay. It installs through the personal local marketplace using `codex plugin add chess-review@personal`. A local authoring helper creates that marketplace entry; its generated source location is `~/plugins/chess-review`. Edit this repository, rebuild and copy the generated package there, then use the supported cachebuster/reinstall flow. Never edit the installed cache. Complete startup/update/use instructions will accompany the verified first version.
+1. Open Games, enter your Chess.com username, and import recent completed standard games. The username is remembered after a successful refresh. Brian's username is initially unset; the labeled verification fixture is available for checking setup.
+2. Select a game and choose Analyze. Local analysis reports progress, then shows player accuracy, move classifications, and key moments. An interrupted job offers Resume and preserves completed evidence.
+3. Navigate the played line and ask native chat about the selected position. Coaching checks evidence and alternatives through semantic chess tools; demonstrated variations leave the original game untouched. Moving a piece during ordinary review creates a variation; Return to game restores the played position.
+4. Retry an analyzed player move. Click or drag a legal move on the board, or submit SAN (`Nf3`) or from-to notation (`g1f3`). Promotions offer an explicit piece choice. The answer stays hidden until an attempt or reveal. Hints, first attempts, sound alternatives, and prior answer exposure are recorded separately; retries do not change the original score.
+
+Saved mistakes and comparable history use actual imported games under the same scoring version and exact time control. The fixture supplies no personal progress. Multiple open boards have explicit, independent sessions. To restore a particular session in native chat, ask to reopen its session ID from the attached review context.
+
+## Local data and verification
+
+Data lives outside the plugin cache at `~/Library/Application Support/Chess Review/chess-review.sqlite`; the verified engine and its source live in that directory's `engine/stockfish/` subdirectory. `CHESS_REVIEW_DATA_DIR` selects another store, and `CHESS_REVIEW_STOCKFISH` selects a binary that must match the frozen hash. Keep personal databases private. Neither databases nor engine binaries are published in this source repository.
+
+```sh
+npm run setup:engine
+npm test
+npm run build
+node scripts/verify-stdio.mjs
+```
+
+The build includes corresponding plugin source and license notices. The verifier uses a disposable store and actual compiled MCP stdio transport, local analysis, retry, and restart. It does not stand in for native rendering checks. See [verification evidence](docs/verification.md), [host integration](docs/host-sdk-findings.md), [scoring](docs/scoring-v1.md), [engine measurements](docs/engine-benchmark.md), [import](docs/import.md), [analysis](docs/analysis.md), and [learning](docs/learning.md).
 
 ## License
 
-AGPL-3.0-or-later. The scoring code adapts Lichess source. See [third-party notices](docs/third-party-notices.md) and [LICENSE](LICENSE). No Stockfish binary is published in this source repository.
+AGPL-3.0-or-later. See [LICENSE](LICENSE) and [third-party source and notices](docs/third-party-notices.md).

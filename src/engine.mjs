@@ -1,7 +1,8 @@
 import { spawn } from 'node:child_process';
 import { createHash } from 'node:crypto';
 import { readFile } from 'node:fs/promises';
-import { fileURLToPath } from 'node:url';
+import { join } from 'node:path';
+import { defaultDataDir } from './store.mjs';
 import { Chess, DEFAULT_POSITION } from 'chess.js';
 
 export const ENGINE_PROFILE = Object.freeze({
@@ -11,7 +12,6 @@ export const ENGINE_PROFILE = Object.freeze({
   nnue: 'nn-1a298aa575a0.nnue', nnueSha256: '1a298aa575a085434d29027978dc36867fe9c5bcea9376654b7a8eba1e52dfc2', threads: 1, hashMb: 16,
   ordinaryNodes: 100_000, refinementNodes: 400_000,
 });
-const defaultBinary = fileURLToPath(new URL('../.runtime/stockfish/stockfish/stockfish-macos-universal', import.meta.url));
 
 export function replayPosition(initialFen = DEFAULT_POSITION, moves = []) {
   const chess = new Chess(initialFen);
@@ -22,8 +22,15 @@ export function replayPosition(initialFen = DEFAULT_POSITION, moves = []) {
   return chess;
 }
 
+export function selectCompletedEvidence({ last, lastExact, bestMove }) {
+  const chosen = last?.exact && last.pv?.[0] === bestMove ? last : lastExact?.pv?.[0] === bestMove ? lastExact : null;
+  const finalPartialIteration = last && last !== chosen ? { ...last } : null;
+  return chosen ? { ...chosen, ready: true, selection: 'completed-exact', searchedNodes: last.nodes, finalPartialIteration }
+    : { ...last, ready: false, exact: false, selection: 'pending', searchedNodes: last?.nodes || 0, finalPartialIteration };
+}
+
 export class Engine {
-  constructor({ binary = process.env.CHESS_REVIEW_STOCKFISH || defaultBinary, timeoutMs = 30_000 } = {}) {
+  constructor({ binary = process.env.CHESS_REVIEW_STOCKFISH || join(defaultDataDir(),'engine','stockfish','stockfish-macos-universal'), timeoutMs = 30_000 } = {}) {
     this.binary = binary;
     this.timeoutMs = timeoutMs;
     this.identityPromise = null;
@@ -53,7 +60,7 @@ export class Engine {
     const started = performance.now();
     return new Promise((resolve, reject) => {
       const child = spawn(this.binary, [], { stdio: ['pipe', 'pipe', 'pipe'] });
-      let buffer = '', stderr = '', last = null, settled = false, searching = false;
+      let buffer = '', stderr = '', last = null, lastExact = null, settled = false, searching = false;
       const send = command => child.stdin.write(command + '\n');
       const finish = (error, result) => {
         if (settled) return;
@@ -67,6 +74,7 @@ export class Engine {
       const timer = setTimeout(() => finish(new Error('Engine analysis timed out')), this.timeoutMs);
       signal?.addEventListener('abort', abort, { once: true });
       child.on('error', error => finish(error));
+      child.stdin.on('error', error => finish(error));
       child.stderr.on('data', chunk => { stderr = (stderr + chunk).slice(-2000); });
       child.on('exit', code => { if (!settled) finish(new Error(`Engine exited before completing analysis (${code}): ${stderr}`)); });
       child.stdout.on('data', chunk => {
@@ -89,12 +97,14 @@ export class Engine {
             last = { [score[1]]: Number(score[2]) * povSign, exact: !score[3], bound: score[3] || null,
               depth: Number(line.match(/ depth (\d+)/)?.[1] || 0), nodes: Number(line.match(/ nodes (\d+)/)?.[1] || 0),
               pv: line.split(' pv ')[1].split(/\s+/) };
+            if (last.exact) lastExact = last;
           } else if (line.startsWith('bestmove ')) {
             const bestMove = line.split(/\s+/)[1];
             if (!last || !legal.includes(bestMove)) { finish(new Error('Engine returned no usable legal evaluation')); continue; }
-            try { replayPosition(initialFen, [...moves, ...last.pv]); }
+            const selected = selectCompletedEvidence({ last, lastExact, bestMove });
+            try { replayPosition(initialFen, [...moves, ...selected.pv]); }
             catch { finish(new Error('Engine returned an illegal continuation')); continue; }
-            finish(null, { ...evidence, ...last, ready: last.exact, bestMove, elapsedMs: performance.now() - started });
+            finish(null, { ...evidence, ...selected, bestMove, elapsedMs: performance.now() - started });
           }
         }
       });
