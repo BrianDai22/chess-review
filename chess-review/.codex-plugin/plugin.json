@@ -1,0 +1,24 @@
+{
+  "name": "chess-review",
+  "version": "0.1.0+codex.202609301854",
+  "description": "Local game review with a native board and checked chess coaching.",
+  "author": {
+    "name": "Brian Dai"
+  },
+  "skills": "./skills/",
+  "mcpServers": "./.mcp.json",
+  "interface": {
+    "displayName": "Chess Review",
+    "shortDescription": "Review and understand games",
+    "longDescription": "A personal local review board connected to native Codex coaching. One backend owns positions and scores.",
+    "developerName": "Brian Dai",
+    "category": "Productivity",
+    "capabilities": [
+      "Interactive",
+      "Write"
+    ],
+    "defaultPrompt": "Open my chess review board.",
+    "logo": "./assets/pawn.svg",
+    "composerIcon": "./assets/pawn.svg"
+  }
+}

@@ -1,0 +1,6 @@
+node_modules/
+.runtime/
+chess-review/server/
+chess-review/ui.html
+artifacts/*.zip
+.DS_Store
