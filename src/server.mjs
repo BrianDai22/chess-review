@@ -4,7 +4,7 @@ import { registerAppResource, registerAppTool, RESOURCE_MIME_TYPE } from '@model
 import { OpenAIExtensions } from '@openai/mcp-extensions/server';
 import { z } from 'zod';
 import { readFileSync } from 'node:fs';
-import { fileURLToPath } from 'node:url';
+import { createHash } from 'node:crypto';
 import { Store } from './store.mjs';
 import { Reviews, ensureFixture } from './review.mjs';
 import { ChessComImporter } from './importer.mjs';
@@ -23,13 +23,20 @@ const importer = new ChessComImporter(store);
 const education = new Education({store,engine,reviews});
 // The global sidebar entry uses MCP server icons, separately from the plugin listing logo.
 const pawnIcon = { src: 'data:image/svg+xml;base64,' + readFileSync(new URL('../assets/pawn.svg', import.meta.url)).toString('base64'), mimeType: 'image/svg+xml', sizes: ['64x64'] };
+// A plugin update may remove this version's cache while its MCP process is
+// still serving requests. Keep that process's immutable bundled UI in memory.
+const reviewHtml = readFileSync(new URL('../ui.html', import.meta.url), 'utf8');
 const server = new McpServer({ name: 'chess-review', version: '0.1.0', icons: [pawnIcon] });
 new OpenAIExtensions(server);
-const uri = 'ui://chess-review/review';
-registerAppResource(server, 'review-board', uri, {}, async () => ({ contents: [{ uri, mimeType: RESOURCE_MIME_TYPE,
-  text: readFileSync(fileURLToPath(new URL('../ui.html', import.meta.url)), 'utf8'),
-  _meta: { ui: { csp: { connectDomains: [], resourceDomains: [] } }, 'openai/ui': { preferredDisplayMode: 'fullscreen', availableDisplayModes: ['fullscreen'] } }
-}] }));
+const legacyUri = 'ui://chess-review/review';
+// Hosts cache UI documents separately from plugin versions and connections.
+const uri = `ui://chess-review/review-${createHash('sha256').update(reviewHtml).digest('hex').slice(0, 16)}.html`;
+for (const resourceUri of [uri, legacyUri]) {
+  registerAppResource(server, resourceUri === uri ? 'review-board' : 'review-board-legacy', resourceUri, {}, async () => ({ contents: [{ uri: resourceUri, mimeType: RESOURCE_MIME_TYPE,
+    text: reviewHtml,
+    _meta: { ui: { csp: { connectDomains: [], resourceDomains: [] } }, 'openai/ui': { preferredDisplayMode: 'fullscreen', availableDisplayModes: ['fullscreen'] } }
+  }] }));
+}
 function result(data) { return { content: [{ type: 'text', text: JSON.stringify(data) }], structuredContent: data }; }
 function tool(name, description, inputSchema, fn, appOnly = false, opener = false) {
   registerAppTool(server, name, { title: opener ? 'Review Board' : name.replaceAll('_', ' '), description, inputSchema,

@@ -13,7 +13,7 @@ const tick = () => new Promise(resolve => setImmediate(resolve));
 async function settle() { for (let i = 0; i < 6; i++) await tick(); }
 function deferred() { let resolve; const promise = new Promise(r => resolve = r); return { promise, resolve }; }
 
-function harness({ delayedContext = false, delayedSync = false, delayedSyncCall = 1, delayedLaunch = false, failedContextCalls = 0, initialState = initial, launchState, toolResponses = {}, catalogResult, hostMessage = true, hostExperimentalMessage = false, messageResult = {}, delayedMessage = false } = {}) {
+function harness({ delayedContext = false, delayedContextCall = 1, delayedCoachingContext = false, delayedSync = false, delayedSyncCall = 1, delayedLaunch = false, failedContextCalls = 0, initialState = initial, launchState, toolResponses = {}, catalogResult, hostMessage = true, hostExperimentalMessage = false, messageResult = {}, delayedMessage = false, reducedMotion = false, missingLaunchResult = false, launchArguments } = {}) {
   const nodes = new Map();
   function node() {
     return { textContent: '', value: '', hidden: false, disabled: false, open: false, focusCount: 0, listeners: {}, children: [], dataset: {}, attributes: {},
@@ -27,8 +27,8 @@ function harness({ delayedContext = false, delayedSync = false, delayedSyncCall 
     getElementById(id) { if (!nodes.has(id)) nodes.set(id, node()); return nodes.get(id); },
     createElement: node, createDocumentFragment: node,
     addEventListener(name, fn) { this.listeners[name] = fn; } };
-  const messageCalls = [], contextCalls = [], toolCalls = [], timerCallbacks = [], boardConfigurations = [];
-  const contextWait = deferred(), syncWait = deferred(), launchWait = deferred(), messageWait = deferred();
+  const messageCalls = [], contextCalls = [], toolCalls = [], timerCallbacks = [], timerDelays = [], boardConfigurations = [];
+  const contextWait = deferred(), coachingWait=deferred(),syncWait = deferred(), launchWait = deferred(), messageWait = deferred();
   let now = 0;
   let canonical = { ...initialState }, appInstance, boardInstance;
   class App {
@@ -37,7 +37,7 @@ function harness({ delayedContext = false, delayedSync = false, delayedSyncCall 
     getHostCapabilities() { return { ...(hostMessage ? { message: { text: {} } } : {}), ...(hostExperimentalMessage ? { experimental: { 'openai/message': {} } } : {}) }; }
     async sendMessage(message) { messageCalls.push(message); return delayedMessage ? messageWait.promise : messageResult; }
     getHostContext() { return { displayMode: 'fullscreen', availableDisplayModes: ['fullscreen'], theme: 'light' }; }
-    async connect() { if (delayedLaunch) await launchWait.promise; this.ontoolresult({ structuredContent: launchState || canonical }); }
+    async connect() { if (delayedLaunch) await launchWait.promise; if(launchArguments !== undefined)this.ontoolinput?.({arguments:launchArguments});if(!missingLaunchResult)this.ontoolresult({ structuredContent: launchState || canonical }); }
     async callServerTool(call) {
       toolCalls.push(call);
       if (toolResponses[call.name]) {
@@ -63,7 +63,8 @@ function harness({ delayedContext = false, delayedSync = false, delayedSyncCall 
     constructor(app) { this.app = app; this.modelContext = { update: async data => {
       contextCalls.push(data);
       if (contextCalls.length <= failedContextCalls) throw new Error('Temporary native bridge failure');
-      if (delayedContext && contextCalls.length === 1) return contextWait.promise;
+      if (delayedContext && contextCalls.length === delayedContextCall) return contextWait.promise;
+      if (delayedCoachingContext && data.structuredContent.coachingRequest) return coachingWait.promise;
       return { updateId: `accepted-${data.structuredContent.revision}` };
     } }; }
   }
@@ -78,12 +79,12 @@ function harness({ delayedContext = false, delayedSync = false, delayedSyncCall 
       destroy() {} };
     return boardInstance;
   }
-  runInNewContext(source, { App, OpenAIExtensions, Chessground, Chess, document, window: { addEventListener() {} },
+  runInNewContext(source, { App, OpenAIExtensions, Chessground, Chess, document, window: { addEventListener() {}, matchMedia: () => ({ matches: reducedMotion, addEventListener() {} }) },
     crypto: { randomUUID: () => 'mount-one' },
     Date: { now: () => now },
     applyDocumentTheme() {}, applyHostStyleVariables() {},
-    setTimeout(fn) { timerCallbacks.push(fn); return timerCallbacks.length; }, clearTimeout() {}, console });
-  return { nodes, document, getNode: id => document.getElementById(id), messageCalls, messageWait, contextCalls, toolCalls, timerCallbacks, boardConfigurations, contextWait, syncWait, launchWait, setNow(value) { now = value; },
+    setTimeout(fn,delay) { timerCallbacks.push(fn);timerDelays.push(delay);return timerCallbacks.length; }, clearTimeout() {}, console });
+  return { nodes, document, getNode: id => document.getElementById(id), messageCalls, messageWait, contextCalls, toolCalls, timerCallbacks, timerDelays, boardConfigurations, contextWait, coachingWait,syncWait, launchWait, setNow(value) { now = value; },
     get canonical() { return canonical; }, get app() { return appInstance; }, get board() { return boardInstance; } };
 }
 
@@ -235,7 +236,7 @@ test('scores and labels are shown only when canonical analysis is ready', async 
   const complete = harness({ initialState: ready }); await settle();
   assert.equal(complete.nodes.get('assessment').hidden, false);
   assert.equal(complete.nodes.get('accuracy').textContent, '93.5');
-  assert.equal(complete.nodes.get('classification').textContent, 'e4 · Good');
+  assert.equal(complete.nodes.get('classification').textContent, 'Good');
   assert.equal(complete.nodes.get('evaluation').textContent, 'White +0.35');
   assert.equal(complete.nodes.get('start-retry').disabled, false);
 });
@@ -780,7 +781,7 @@ test('guided review separates correction from engine continuation and restores t
   h.nodes.get('resume-played').click(); await settle();
   assert.equal(h.toolCalls.find(call => call.name === 'go_to_move').arguments.ply, 2);
   assert.equal(h.nodes.get('resume-played').hidden, true);
-  assert.equal(h.nodes.get('classification').textContent, 'e5 · Mistake');
+  assert.equal(h.nodes.get('classification').textContent, 'Mistake');
   h.nodes.get('engine-mode').click();
   assert.equal(h.nodes.get('engine-mode-panel').hidden, false);
   assert.equal(h.nodes.get('coach-panel').hidden, true);
@@ -808,15 +809,16 @@ test('Next key moment follows ordered canonical moments and loops after the last
   assert.equal(h.toolCalls.filter(call => call.name === 'go_to_move').at(-1).arguments.ply, 1);
 });
 
-test('Explain this move sends explicit acknowledged state to native chat without mutating the board', async () => {
+test('Explain sends a concise visible trigger with explicit guarded request in acknowledged model context', async () => {
   const h = harness({ initialState: guided }); await settle();
   h.nodes.get('explain-move').click(); await settle();
   assert.equal(h.messageCalls.length, 1);
   assert.equal(h.messageCalls[0].role, 'user');
   const prompt = h.messageCalls[0].content[0].text;
-  assert.match(prompt, /"sessionId":"review-one"/);
-  assert.match(prompt, /require revision 1/);
-  assert.match(prompt, /Do not invent engine facts, change the board/);
+  assert.equal(prompt,'Explain this move and show the key idea on my review board.');
+  const context=h.contextCalls.at(-1),request=context.structuredContent.coachingRequest;
+  assert.equal(request.sessionId,'review-one');assert.equal(request.revision,1);assert.equal(request.fen,guided.fen);
+  assert.match(context.content[0].text,/Do not invent engine facts, change the board/);
   assert.equal(h.toolCalls.some(call => ['go_to_move', 'show_variation', 'show_best_move'].includes(call.name)), false);
   assert.equal(h.nodes.get('coach-message').textContent, 'Explanation requested in chat.');
 });
@@ -890,7 +892,7 @@ test('experimental OpenAI message capability supports coaching through the exist
   assert.equal(message.role, 'user');
   assert.equal(message._meta['openai/message'].target, 'active');
   assert.equal(message._meta['openai/message'].send, true);
-  assert.match(message.content[0].text, /require revision 1/);
+  assert.equal(message.content[0].text,'Explain this move and show the key idea on my review board.');
   assert.equal(h.nodes.get('error').hidden, true);
 });
 
@@ -908,4 +910,167 @@ test('manual branch has a directly accessible Return to game in guided review', 
   const hidden = harness({ initialState: { ...branch, retry: hiddenRetry } }); await settle();
   assert.equal(hidden.nodes.get('coach-return').hidden, true);
   assert.equal(hidden.nodes.get('coach-return').disabled, true);
+});
+
+test('smooth board uses brief motion, respects reduced motion, and highlights only a replay-checked last move', async () => {
+  const chess = new Chess(); chess.move('e4'); chess.move('e5');
+  const position = { ...initial, selectedPly: 2, moveHistory: ['e4', 'e5'], fen: chess.fen(), sideToMove: 'white' };
+  const h = harness({ initialState: position }); await settle();
+  assert.equal(h.board.config.animation.enabled, true);
+  assert.ok(h.board.config.animation.duration >= 160 && h.board.config.animation.duration <= 200);
+  assert.deepEqual(Array.from(h.board.config.lastMove), ['e7', 'e5']);
+  const quiet = harness({ initialState: position, reducedMotion: true }); await settle();
+  assert.equal(quiet.board.config.animation.enabled, false);
+  const invalid = harness({ initialState: { ...position, moveHistory: ['e4'] } }); await settle();
+  assert.equal(invalid.board.config.lastMove, undefined);
+  const custom = new Chess('8/P6k/8/8/8/8/7K/8 w - - 0 1'); custom.move('a8=N');
+  const branch = harness({ initialState: { ...initial, initialFen: '8/P6k/8/8/8/8/7K/8 w - - 0 1', variation: ['a8=N'], moveHistory: ['a8=N'], fen: custom.fen() } }); await settle();
+  assert.deepEqual(Array.from(branch.board.config.lastMove), ['a7', 'a8']);
+});
+
+test('unchanged review graph, move list and branch trail retain focused DOM nodes across unrelated renders', async () => {
+  const h = harness({ initialState: overviewGame }); await settle();
+  const graph = h.nodes.get('evaluation-graph').children[1], move = h.nodes.get('move-list').children[1], count = h.nodes.get('classification-counts').children[0];
+  move.focus(); h.nodes.get('move-list').scrollTop = 120;
+  h.nodes.get('engine-mode').click(); await settle();
+  assert.equal(h.nodes.get('evaluation-graph').children[1], graph);
+  assert.equal(h.nodes.get('move-list').children[1], move);
+  assert.equal(h.nodes.get('classification-counts').children[0], count);
+  assert.equal(move.focusCount, 1); assert.equal(h.nodes.get('move-list').scrollTop, 120);
+  const branch = harness({ initialState: { ...guided, variation: ['e4'], moveHistory: ['e4'], fen: afterE4, analysis: { ...guided.analysis, currentPosition: null } } }); await settle();
+  const trail = branch.nodes.get('variation-trail').children[0];
+  branch.nodes.get('engine-toggle').click(); await settle();
+  assert.equal(branch.nodes.get('variation-trail').children[0], trail);
+});
+
+test('rapid navigation coalesces to latest intended played ply without displaying speculative positions', async () => {
+  const first = deferred(), playedMoves = ['e4', 'e5', 'Nf3', 'Nc6'];
+  const h = harness({ initialState: { ...initial, playedMoves, totalPlies: 4 }, toolResponses: {
+    go_to_move: async (call, canonical) => {
+      if (call.arguments.ply === 1) await first.promise;
+      const chess = new Chess(); for (const move of playedMoves.slice(0, call.arguments.ply)) chess.move(move);
+      return { ...canonical, selectedPly: call.arguments.ply, moveHistory: playedMoves.slice(0, call.arguments.ply), fen: chess.fen(), revision: canonical.revision + 1 };
+    }
+  } }); await settle();
+  h.nodes.get('next').click(); await settle();
+  h.nodes.get('next').click(); h.nodes.get('next').click(); await settle();
+  assert.equal(h.board.config.fen, initial.fen);
+  assert.equal(h.toolCalls.filter(call => call.name === 'go_to_move').length, 1);
+  first.resolve(); await settle();
+  assert.equal(h.canonical.selectedPly, 3);
+  assert.deepEqual(h.toolCalls.filter(call => call.name === 'go_to_move').map(call => call.arguments.ply), [1, 3]);
+  assert.deepEqual(h.toolCalls.filter(call => call.name === 'go_to_move').map(call => call.arguments.expectedRevision), [1, 2]);
+});
+
+test('rapid navigation reverses its pending destination and remains bounded by the played game', async () => {
+  const first = deferred(), playedMoves = ['e4', 'e5', 'Nf3', 'Nc6'];
+  const h = harness({ initialState: { ...initial, playedMoves, totalPlies: 4 }, toolResponses: {
+    go_to_move: async (call, canonical) => {
+      if (call.arguments.ply === 1) await first.promise;
+      return { ...canonical, selectedPly: call.arguments.ply, revision: canonical.revision + 1 };
+    }
+  } }); await settle();
+  h.nodes.get('next').click(); await settle();
+  for (let i = 0; i < 10; i++) h.nodes.get('next').click();
+  assert.equal(h.nodes.get('next').disabled, true);
+  for (let i = 0; i < 10; i++) h.nodes.get('previous').click();
+  assert.equal(h.nodes.get('previous').disabled, true);
+  first.resolve(); await settle();
+  assert.equal(h.canonical.selectedPly, 0);
+  assert.deepEqual(h.toolCalls.filter(call => call.name === 'go_to_move').map(call => call.arguments.ply), [1, 0]);
+});
+
+test('failed navigation drops queued clicks and a delayed old response cannot overwrite a newer selected game', async () => {
+  const failed = deferred();
+  const h = harness({ initialState: { ...initial, playedMoves: ['e4','e5','Nf3'] }, toolResponses: {
+    go_to_move: async () => { await failed.promise; throw new Error('Navigation disconnected'); }
+  } }); await settle();
+  h.nodes.get('next').click(); await settle(); h.nodes.get('next').click(); h.nodes.get('next').click();
+  failed.resolve(); await settle();
+  assert.equal(h.toolCalls.filter(call => call.name === 'go_to_move').length, 1);
+  assert.equal(h.board.config.fen, initial.fen); assert.match(h.nodes.get('error').textContent, /Navigation disconnected/);
+  const delayed = deferred(); let switched = false;
+  const latest = { ...initial, gameId: 'new-game', revision: 10, selectedPly: 1, fen: afterE4, moveHistory: ['e4'] };
+  const other = harness({ initialState: { ...initial, playedMoves: ['e4','e5','Nf3'] }, toolResponses: {
+    go_to_move: async (call, canonical) => { await delayed.promise; return { ...canonical, selectedPly:call.arguments.ply, revision:2 }; },
+    sync_review_view: (call, canonical) => ({ changed:switched, state:switched?latest:canonical })
+  } }); await settle();
+  other.nodes.get('next').click(); await settle(); other.nodes.get('next').click(); other.nodes.get('next').click();
+  switched = true; await other.timerCallbacks.at(-1)(); await settle();
+  delayed.resolve(); await settle();
+  assert.equal(other.board.config.fen, latest.fen);
+  assert.equal(other.contextCalls.at(-1).structuredContent.gameId, latest.gameId);
+  assert.equal(other.toolCalls.filter(call => call.name === 'go_to_move').length, 1);
+});
+
+async function runLaunchFallback(h) { const index=h.timerDelays.indexOf(2500);assert.ok(index>=0,'missing launch needs a bounded recovery timer');await h.timerCallbacks[index]();await settle(); }
+test('missing launch result recovers only the explicit restore arguments then confirms canonical state', async () => {
+  const restored={...initial,sessionId:'saved-review',gameId:'saved-game',revision:8};
+  const h=harness({missingLaunchResult:true,launchArguments:{sessionId:'saved-review',gameId:'saved-game'},initialState:restored,
+    toolResponses:{open_review:call=>{assert.deepEqual({...call.arguments},{sessionId:'saved-review',gameId:'saved-game'});return restored;}}});
+  await settle();assert.equal(h.contextCalls.length,0);await runLaunchFallback(h);
+  assert.equal(h.toolCalls.filter(call=>call.name==='open_review').length,1);
+  assert.equal(h.toolCalls.find(call=>call.name==='sync_review_view').arguments.sessionId,'saved-review');
+  assert.equal(h.contextCalls.at(-1).structuredContent.revision,8);assert.equal(h.nodes.get('next').disabled,false);
+});
+test('direct-entry missing result uses declared fixture default and never guesses a neighboring session', async () => {
+  const h=harness({missingLaunchResult:true,initialState:{...initial,sessionId:'unrelated-global-session',gameId:'private-other-game'},
+    toolResponses:{open_review:call=>{assert.deepEqual({...call.arguments},{});return initial;}}});
+  await settle();await runLaunchFallback(h);
+  assert.equal(h.contextCalls.at(-1).structuredContent.sessionId,initial.sessionId);
+  assert.equal(h.toolCalls.find(call=>call.name==='open_review').arguments.sessionId,undefined);
+});
+test('normal or delayed launch result prevents recovery, and late original results cannot replace a confirmed fallback', async () => {
+  const normal=harness();await settle();assert.equal(normal.toolCalls.some(call=>call.name==='open_review'),false);
+  const delayed=harness({missingLaunchResult:true,launchArguments:{sessionId:initial.sessionId}});await settle();
+  delayed.app.ontoolresult({structuredContent:initial});await settle();await runLaunchFallback(delayed);
+  assert.equal(delayed.toolCalls.some(call=>call.name==='open_review'),false);
+  const confirmed={...initial,sessionId:'confirmed-fallback',revision:10};
+  const fallback=harness({missingLaunchResult:true,launchArguments:{sessionId:confirmed.sessionId},initialState:confirmed,toolResponses:{open_review:()=>confirmed}});
+  await settle();await runLaunchFallback(fallback);
+  fallback.app.ontoolresult({structuredContent:initial});await settle();
+  assert.equal(fallback.contextCalls.at(-1).structuredContent.sessionId,confirmed.sessionId);
+  assert.equal(fallback.contextCalls.at(-1).structuredContent.revision,10);
+});
+
+test('failed launch recovery exposes one actionable retry and never repeats automatically', async () => {
+  let attempts=0;const h=harness({missingLaunchResult:true,launchArguments:{sessionId:initial.sessionId},toolResponses:{open_review:()=>{if(++attempts===1)throw new Error('Backend temporarily disconnected');return initial;}}});
+  await settle();await runLaunchFallback(h);
+  assert.equal(attempts,1);assert.equal(h.nodes.get('retry-launch').hidden,false);
+  assert.match(h.nodes.get('error').textContent,/Retry opening review.*Backend temporarily disconnected/);
+  await h.timerCallbacks.find((_,index)=>h.timerDelays[index]===1500)();await settle();assert.equal(attempts,1);
+  h.nodes.get('retry-launch').click();await settle();
+  assert.equal(attempts,2);assert.equal(h.nodes.get('retry-launch').hidden,true);assert.equal(h.nodes.get('error').hidden,true);
+});
+test('normal result arriving during fallback wins and mismatched fallback identity cannot be adopted', async () => {
+  const wait=deferred();const h=harness({missingLaunchResult:true,launchArguments:{sessionId:initial.sessionId},toolResponses:{open_review:()=>wait.promise}});
+  await settle();const recovery=h.timerCallbacks[h.timerDelays.indexOf(2500)]();await settle();
+  h.app.ontoolresult({structuredContent:initial});await settle();
+  wait.resolve({...initial,sessionId:'late-fallback-other'});await recovery;await settle();
+  assert.equal(h.contextCalls.at(-1).structuredContent.sessionId,initial.sessionId);
+  const wrong=harness({missingLaunchResult:true,launchArguments:{sessionId:'requested-session'},toolResponses:{open_review:()=>initial}});
+  await settle();await runLaunchFallback(wrong);
+  assert.equal(wrong.contextCalls.length,0);assert.equal(wrong.nodes.get('retry-launch').hidden,false);
+  assert.match(wrong.nodes.get('error').textContent,/does not match/);
+  const invalid=harness({missingLaunchResult:true,launchArguments:{sessionId:''}});await settle();await runLaunchFallback(invalid);
+  assert.equal(invalid.toolCalls.some(call=>call.name==='open_review'),false);assert.equal(invalid.nodes.get('retry-launch').hidden,false);
+});
+
+test('Explain waits for its own request acknowledgment behind an older same-revision publication', async () => {
+  const h=harness({initialState:guided,delayedContext:true,delayedContextCall:2,delayedCoachingContext:true,toolResponses:{sync_review_view:(call,canonical)=>({state:canonical,changed:true})}});
+  await settle();const poll=h.timerCallbacks.at(-1)();await settle();
+  h.nodes.get('explain-move').click();await settle();assert.equal(h.messageCalls.length,0);
+  h.contextWait.resolve({updateId:'older-same-revision'});await settle();
+  assert.equal(h.contextCalls.length,3);assert.ok(h.contextCalls[2].structuredContent.coachingRequest);
+  assert.equal(h.messageCalls.length,0);
+  h.coachingWait.resolve({updateId:'exact-coaching-request'});await poll;await settle();
+  assert.equal(h.messageCalls.length,1);
+});
+test('position change during Explain acknowledgment discards request and sends no stale trigger', async () => {
+  const h=harness({initialState:guided,delayedCoachingContext:true});await settle();
+  h.nodes.get('explain-move').click();await settle();assert.equal(h.messageCalls.length,0);
+  h.nodes.get('next').click();await settle();
+  h.coachingWait.resolve({updateId:'old-position-request'});await settle();
+  assert.equal(h.messageCalls.length,0);assert.equal(h.contextCalls.at(-1).structuredContent.coachingRequest,undefined);
+  assert.match(h.nodes.get('error').textContent,/position changed/);
 });

@@ -9,6 +9,10 @@ const extensions = new OpenAIExtensions(app);
 const mountId = crypto.randomUUID();
 let state;
 let launchReceived = false;
+let launchArguments = {};
+let launchInputError;
+let launchTimer;
+let launchRecoveryInFlight = false;
 let connected = false;
 let disposed = false;
 let pollInFlight = false;
@@ -18,11 +22,17 @@ let displayedRevision;
 let contextRevision;
 let contextUpdateId;
 let pendingContext;
-let contextInFlight = false;
+let contextPublication;
+let coachingRequest;
+let acknowledgedCoachingRequest;
 let contextRetryAfter = 0;
 let contextRetryDelay = 1500;
 let contextFailure;
 let manualInFlight = false;
+let navigationIntent;
+let navigationRun;
+const persistentChildren = new Map();
+const reducedMotion = window.matchMedia?.('(prefers-reduced-motion: reduce)');
 let ground;
 let canonicalSynced = false;
 let catalog = { username: null, games: [] };
@@ -60,7 +70,7 @@ document.body.innerHTML = `<main class="review" aria-label="Chess review">
     <aside class="workbench" aria-label="Review tools">
       <nav id="review-modes" class="review-modes" aria-label="Review mode"><button id="review-mode" class="btn btn-secondary" aria-pressed="true" type="button">Review</button><button id="engine-mode" class="btn btn-secondary" aria-pressed="false" type="button">Engine</button><button id="overview-toggle" class="btn btn-secondary" type="button">Overview</button></nav>
       <section id="review-overview" class="review-overview" aria-label="Review overview" hidden><h2>Your game at a glance</h2><p id="overview-summary" class="muted"></p><div id="classification-counts" class="classification-counts"></div><button id="start-review" class="btn btn-primary" type="button" disabled>Start review</button></section>
-      <section id="coach-panel" class="coach-panel" aria-label="Move review"><h2 id="coach-title">Choose a move</h2><div class="assessment" id="assessment" hidden><div class="metric" id="move-assessment"><strong id="classification" class="classification"></strong></div><div class="metric" id="position-assessment"><strong id="evaluation"></strong></div></div><p id="coach-facts"></p><p id="coaching-note" class="coaching-note" aria-live="polite" hidden></p><div class="coach-actions"><button id="show-better" class="btn btn-primary" type="button" hidden disabled>Show better move</button><button id="resume-played" class="btn btn-primary" type="button" hidden disabled>Resume played move</button><button id="coach-return" class="btn btn-secondary" type="button" hidden disabled>Return to game</button><button id="explain-move" class="btn btn-secondary" type="button" disabled>Explain this move</button></div><p id="coach-message" class="muted" role="status" hidden></p></section>
+      <section id="coach-panel" class="coach-panel" aria-label="Move review"><h2 id="coach-title">Choose a move</h2><div class="assessment" id="assessment" hidden><div class="metric" id="move-assessment"><strong id="classification" class="classification"></strong></div><div class="metric" id="position-assessment"><strong id="evaluation"></strong></div></div><p id="coach-facts"></p><p id="coach-next-action" class="coach-next-action"></p><p id="coaching-note" class="coaching-note" aria-live="polite" hidden></p><div class="coach-actions"><button id="show-better" class="btn btn-primary" type="button" hidden disabled>Show better move</button><button id="resume-played" class="btn btn-primary" type="button" hidden disabled>Resume played move</button><button id="coach-return" class="btn btn-secondary" type="button" hidden disabled>Return to game</button><button id="explain-move" class="btn btn-secondary" type="button" disabled>Explain this move</button></div><p id="coach-message" class="muted" role="status" hidden></p></section>
       <section id="evaluation-chart" class="evaluation-chart" aria-label="Game evaluation" hidden><div class="chart-heading"><span>White advantage</span><span>Black advantage</span></div><div id="evaluation-graph" class="evaluation-graph" aria-label="Select a move on the evaluation graph"></div></section>
       <div id="engine-mode-panel" hidden>
       <section id="engine-guide" class="engine-guide" aria-label="Engine guide"><div class="engine-actions"><button id="engine-toggle" class="btn btn-secondary" type="button" aria-pressed="true">Engine on</button><button id="engine-play" class="btn btn-primary" type="button" disabled>Play best move</button><button id="return" class="btn btn-secondary" type="button" disabled hidden>Return to game</button></div><p id="engine-status" class="muted" aria-live="polite"></p><div id="engine-line" class="line-trail" aria-label="Checked engine continuation"></div></section>
@@ -69,7 +79,7 @@ document.body.innerHTML = `<main class="review" aria-label="Chess review">
       <section class="review-results" aria-label="Game analysis"><div class="review-actions" id="review-actions"><button id="analyze" class="btn btn-primary" type="button" disabled>Analyze game</button><div class="analysis-progress" id="analysis-progress" hidden><p id="analysis-status" aria-live="polite"></p><progress id="analysis-meter" aria-label="Game analysis progress" hidden></progress></div><button id="start-retry" class="btn btn-secondary" type="button" disabled hidden>Retry this move</button></div></section>
       <section id="key-moments-panel" aria-label="Key moments" hidden><div class="moment-heading"><h2>Key moments</h2><button id="next-moment" class="btn btn-secondary" type="button" disabled>Next key moment</button></div><div id="key-moments" class="moment-list"></div></section>
       <section id="retry-panel" class="retry-panel" aria-label="Retry decision" hidden><h2 id="retry-title">Retry this decision</h2><p id="retry-instruction"></p><p id="retry-feedback" class="retry-feedback" aria-live="polite" hidden></p><p id="retry-answer" class="checked-answer" hidden></p><div class="retry-actions"><button id="retry-hint" class="btn btn-secondary" type="button" disabled>Hint</button><button id="end-retry" class="btn btn-secondary" type="button" disabled>Back to review</button></div></section>
-      <p id="error" role="alert" hidden></p>
+      <p id="error" role="alert" hidden></p><button id="retry-launch" class="btn btn-primary review-launch-retry" type="button" hidden>Retry opening review</button>
     </aside>
   </div>
   <footer class="secondary-tools"><details id="moves-panel"><summary id="moves-toggle">Moves</summary><div class="drawer drawer-content"><h2>Played moves</h2><div id="move-list" class="move-list" aria-label="Played moves"></div></div></details><details id="variation-panel"><summary id="keyboard-toggle">Keyboard moves</summary><div class="drawer drawer-content"><form id="variation-form"><label class="form-label" for="variation">Moves from this position</label><div class="variation-input"><input class="form-control" id="variation" autocomplete="off" aria-label="Variation moves in SAN or from-to notation" placeholder="Nf3 Nc6 or g1f3 b8c6"/><button id="show-variation" class="btn btn-secondary" type="submit" disabled>Show</button></div></form><form id="retry-form" hidden><label class="form-label" for="retry-move">Your move</label><div class="variation-input"><input id="retry-move" class="form-control" autocomplete="off" spellcheck="false" aria-describedby="retry-format" placeholder="Nf3 or g1f3"/><button id="submit-retry" class="btn btn-primary" type="submit" disabled>Check move</button></div><span id="retry-format" class="sr-only">Use chess notation, such as Nf3, or from-to notation, such as g1f3.</span><details class="retry-record"><summary>Attempt record</summary><p id="retry-history" class="muted"></p></details></form><details id="position-details" class="position-details"><summary>Piece locations</summary><p id="accessible-position"></p></details></div></details><details id="learning-panel" class="learning-panel"><summary id="learning-title">History</summary><div class="drawer drawer-content"><div id="saved-mistakes" class="moment-list"></div><p id="progress" class="muted"></p></div></details></footer>
@@ -183,10 +193,11 @@ function renderEngineGuide() {
   el('engine-status').textContent = hidden || !engineEnabled || state.analysis?.readiness === 'analyzing' ? '' : evidencePending === evidenceKey() ? 'Checking this position…' : evidenceError && evidenceAttempted === evidenceKey() ? 'Engine guide unavailable. Try another position.' : guide ? guide.line.length ? `Best: ${guide.line[0].san}` : 'No legal continuation' : readyAnalysis() ? 'No checked engine line for this position' : 'Waiting for checked analysis';
   el('engine-status').hidden = !el('engine-status').textContent;
   el('engine-line').hidden = !engineEnabled || !guide?.line.length || hidden;
-  el('engine-line').replaceChildren(...(!hidden && engineEnabled && guide ? guide.line.slice(0, 8).map((move, index) => momentButton(move.san, () => void mutate('show_variation', { moves: [...(state.variation || []), ...guide.line.slice(0, index + 1).map(item => item.uci)] }), !boardCanMove() || Boolean(state.retry))) : []));
+  const line = !hidden && engineEnabled && guide ? guide.line.slice(0,8) : [];
+  retainChildren('engine-line',[state.fen,line],() => line.map((move,index) => momentButton(move.san,() => void mutate('show_variation',{moves:[...(state.variation || []),...line.slice(0,index+1).map(item=>item.uci)]}))),button=>{button.disabled=!boardCanMove() || Boolean(state.retry);});
   const branch = !hidden && !state.retry ? state.variation || [] : [];
   el('variation-trail').hidden = !branch.length;
-  el('variation-trail').replaceChildren(...branch.map((move, index) => momentButton(move, () => void mutate('show_variation', { moves: branch.slice(0, index + 1) }), manualInFlight || !canonicalSynced || Boolean(pendingPromotion))));
+  retainChildren('variation-trail',branch,() => branch.map((move,index) => momentButton(move,()=>void mutate('show_variation',{moves:branch.slice(0,index+1)}))),button=>{button.disabled=manualInFlight || !canonicalSynced || Boolean(pendingPromotion);});
 }
 function evalLabel(evidence) {
   if (!evidence?.ready || !evidence.exact || evidence.bound) return '';
@@ -202,6 +213,24 @@ function momentButton(label, action, disabled = false) {
   button.type = 'button'; button.className = 'moment cursor-interaction'; button.textContent = label;
   button.disabled = disabled; button.addEventListener('click', action); return button;
 }
+function retainChildren(id, content, create, update = () => {}) {
+  const key = JSON.stringify([state.sessionId,state.gameId,content]);
+  let cached = persistentChildren.get(id);
+  if (cached?.key !== key) {
+    cached = {key,nodes:create()}; persistentChildren.set(id,cached); el(id).replaceChildren(...cached.nodes);
+  }
+  cached.nodes.forEach(update);
+}
+function lastMoveSquares() {
+  try {
+    const chess = state.initialFen ? new Chess(state.initialFen) : new Chess();
+    let last;
+    for (const san of state.moveHistory || []) last = chess.move(san);
+    return last && chess.fen() === state.fen ? [last.from,last.to] : undefined;
+  } catch { return; }
+}
+function navigationPly() { return navigationIntent?.sessionId === state?.sessionId && navigationIntent.gameId === state.gameId ? navigationIntent.ply : state?.selectedPly; }
+function navigationBlocked() { return !canonicalSynced || Boolean(pendingPromotion) || retryHidden() || manualInFlight && !navigationIntent; }
 
 function renderGameIdentity() {
   const game = state.game || {};
@@ -240,7 +269,7 @@ function renderReviewControls() {
   const evidence = checkedGuide()?.evidence;
   el('evaluation').textContent = hidden ? '' : evalLabel(evidence);
   const grade = !hidden && ready ? retry?.answerExposed ? retry.originalClassification?.label || '' : state.variation?.length ? '' : selected?.classification?.label || '' : '';
-  el('classification').textContent = grade ? `${retry ? 'Original: ' : selected?.san ? `${selected.san} · ` : ''}${grade}` : '';
+  el('classification').textContent = grade ? `${retry ? 'Original: ' : ''}${grade}` : '';
   el('classification').dataset.grade = grade || '';
   el('move-assessment').hidden = !grade;
   el('position-assessment').hidden = !el('evaluation').textContent;
@@ -264,8 +293,8 @@ function renderReviewControls() {
   el('variation-panel').hidden = false;
   el('retry-form').hidden = !retry;
   el('return').hidden = !state.variation?.length || Boolean(retry);
-  el('previous').disabled ||= hidden || busy;
-  el('next').disabled ||= hidden || busy;
+  el('previous').disabled ||= hidden || navigationBlocked();
+  el('next').disabled ||= hidden || navigationBlocked();
   el('return').disabled ||= hidden || busy;
   el('show-variation').disabled ||= busy;
   el('game').disabled = busy || Boolean(retry) || !catalog.games.length;
@@ -274,13 +303,13 @@ function renderReviewControls() {
   el('game').value = state.gameId;
   const moments = !hidden && ready ? (analysis.keyMoments || []) : [];
   el('key-moments-panel').hidden = !moments.length || Boolean(retry);
-  el('key-moments').replaceChildren(...moments.map(moment => {
+  retainChildren('key-moments',moments,()=>moments.map(moment => {
     const ply = typeof moment === 'number' ? moment : moment.ply;
     const button = momentButton(`${moveLabel(ply, moment.san || '')}${moment.label ? ` · ${moment.label}` : ''}`, () => void mutate('go_to_move', { ply }), busy);
     button.dataset.grade = moment.label || '';
     button.setAttribute('aria-current', ply === state.selectedPly ? 'true' : 'false');
     return button;
-  }));
+  }), (button,index)=>{button.disabled=busy;button.setAttribute('aria-current',String((typeof moments[index]==='number'?moments[index]:moments[index].ply)===state.selectedPly));});
   renderRetry(retry);
   renderLearning(hidden);
   renderEngineGuide();
@@ -308,7 +337,7 @@ function renderGuidedReview() {
   el('start-review').disabled = busy || !ready;
   const own = state.playerColor === 'black' ? 'b' : 'w';
   const counts = ['Best', 'Excellent', 'Good', 'Inaccuracy', 'Mistake', 'Blunder', ...['Brilliant', 'Great', 'Miss'].filter(label => moves.some(move => move.label === label))];
-  el('classification-counts').replaceChildren(...counts.map(label => {
+  retainChildren('classification-counts',[own,moves],()=>counts.map(label => {
     const row = document.createElement('div'); row.className = 'count-row'; row.dataset.grade = label;
     const name = document.createElement('span'); name.textContent = label;
     const values = document.createElement('strong'); values.textContent = `${moves.filter(move => move.color === own && move.label === label).length} / ${moves.filter(move => move.color !== own && move.label === label).length}`;
@@ -320,13 +349,17 @@ function renderGuidedReview() {
   const checkedNote = !hidden && ready && !retry && note?.sessionId === state.sessionId && note.gameId === state.gameId && note.revision === state.revision && note.fen === state.fen && typeof note.text === 'string';
   el('coaching-note').hidden = !checkedNote;
   el('coaching-note').textContent = checkedNote ? `AI coach: ${note.text}` : '';
+  el('coaching-note').title = checkedNote ? note.text : '';
   el('coach-facts').hidden = checkedNote;
   const branch = Boolean(state.variation?.length);
   const grade = !hidden && ready && !branch ? selected?.classification?.label : undefined;
   const loss = selected?.classification?.loss;
   el('coach-title').textContent = comparison ? 'Compare the better move' : branch ? 'Exploring a continuation' : selected ? `${selected.color === own ? 'Your' : 'Opponent’s'} move` : 'Start your review';
-  el('coach-facts').textContent = hidden || !ready ? '' : comparison ? `The checked move replaces ${comparisonAnchor.san || 'the played move'}. Resume to compare the position you reached in the game.` : branch ? 'This is an explored line. The game’s accuracy stays unchanged.' : selected ? `${grade ? `${selected.san} was classified ${grade.toLowerCase()}.` : `${selected.san} is the played move.`}${Number.isFinite(loss) && loss > 0 ? ` It lost ${loss.toFixed(1)} percentage points of modeled winning chances from the position before the move.` : ''}` : 'Start with the first move, or jump straight to a key moment.';
+  el('coach-facts').textContent = hidden || !ready ? '' : comparison ? `The checked move replaces ${comparisonAnchor.san || 'the played move'}.` : branch ? 'Explored line · game score unchanged.' : selected ? Number.isFinite(loss) && loss > 0 ? `Winning chances −${loss.toFixed(1)} points` : '' : 'Step through your game.';
+  el('coach-facts').hidden = checkedNote || !el('coach-facts').textContent;
   const better = !hidden && ready && !retry && !branch && selected && Number.isInteger(selected.ply) && selected.ply > 0 && ['Inaccuracy', 'Mistake', 'Blunder', 'Miss'].includes(grade);
+  el('coach-next-action').hidden = hidden || !ready || retry || checkedNote;
+  el('coach-next-action').textContent = comparison ? 'Resume to compare with your game.' : branch ? 'Move a piece to continue exploring.' : better ? 'See the better move on the board.' : 'Move a piece to explore.';
   el('show-better').hidden = !better; el('show-better').disabled = busy || !better;
   el('resume-played').hidden = !comparison; el('resume-played').disabled = busy || !comparison;
   el('coach-return').hidden = hidden || retry || !branch || Boolean(comparison);
@@ -337,20 +370,21 @@ function renderGuidedReview() {
   el('explain-move').textContent = explainInFlight ? 'Sending…' : 'Explain this move';
   if (hidden || lastExplained !== evidenceKey()) { el('coach-message').hidden = true; el('coach-message').textContent = ''; }
   el('evaluation-chart').hidden = hidden || retry || !ready || !moves.length;
-  el('evaluation-graph').replaceChildren(...moves.map(move => {
+  retainChildren('evaluation-graph',moves,()=>moves.map(move => {
     const score = Number.isFinite(move.mate) ? move.mate > 0 ? 8 : move.mate < 0 ? -8 : 0 : Number.isFinite(move.cp) ? Math.max(-8, Math.min(8, move.cp / 100)) : 0;
     const button = momentButton('', () => { reviewStarted = true; void mutate('go_to_move', { ply: move.ply }); }, busy);
     button.className = 'evaluation-point'; button.setAttribute('style', `--advantage:${score};`);
     button.setAttribute('aria-label', `${moveLabel(move.ply, move.san)} · ${move.label || ''} · ${Number.isFinite(move.mate) ? `mate ${move.mate}` : Number.isFinite(move.cp) ? `White ${(move.cp / 100).toFixed(2)}` : 'Evaluation unavailable'}`);
     button.setAttribute('aria-current', String(!branch && move.ply === state.selectedPly));
     return button;
-  }));
+  }), (button,index)=>{button.disabled=busy;button.setAttribute('aria-current',String(!branch && moves[index].ply===state.selectedPly));});
   el('moves-panel').hidden = hidden || retry;
-  el('move-list').replaceChildren(...(!hidden && !retry ? (state.playedMoves || []).map((san, index) => {
+  const played = !hidden && !retry ? state.playedMoves || [] : [];
+  retainChildren('move-list',[played,moves],()=>played.map((san, index) => {
     const assessment = moves.find(move => move.ply === index + 1);
     const button = momentButton(`${moveLabel(index + 1, san)}${assessment?.label ? ` · ${assessment.label}` : ''}`, () => { reviewStarted = true; void mutate('go_to_move', { ply: index + 1 }); }, busy);
     button.dataset.grade = assessment?.label || ''; button.setAttribute('aria-current', String(!branch && state.selectedPly === index + 1)); return button;
-  }) : []));
+  }), (button,index)=>{button.disabled=busy;button.setAttribute('aria-current',String(!branch && state.selectedPly===index+1));});
   const moments = reviewMoments();
   el('next-moment').disabled = busy || retry || !moments.length;
   el('next-moment').textContent = moments.some(move => move.ply > state.selectedPly) ? 'Next key moment' : 'First key moment';
@@ -365,11 +399,14 @@ async function explainMove() {
     const nativeMessage = extensions.message;
     const sendMessage = nativeMessage?.send ? nativeMessage.send.bind(nativeMessage) : app.getHostCapabilities?.()?.message?.text && typeof app.sendMessage === 'function' ? app.sendMessage.bind(app) : undefined;
     if (!sendMessage) throw new Error('This host cannot send coaching requests from the board. Ask “explain this move” in the native chat, or reopen the board in a supported Codex host.');
+    if (contextRevision !== snapshot.revision) throw new Error('The selected position is still connecting to chat. Try Explain this move again when connected.');
+    const request={...snapshot,requestId:crypto.randomUUID(),mountId,requestedAt:Date.now()};
+    coachingRequest=request;acknowledgedCoachingRequest=undefined;
     queueContext(state); await publishContext();
     const current = { sessionId: state.sessionId, revision: state.revision, gameId: state.gameId, selectedPly: state.selectedPly, fen: state.fen, variation: [...(state.variation || [])] };
     if (JSON.stringify(current) !== identity || retryHidden() || state.retry || !canonicalSynced) throw new Error('The position changed. Choose Explain this move again.');
-    if (contextRevision !== snapshot.revision) throw new Error('The selected position is still connecting to chat. Try Explain this move again when connected.');
-    const result = await sendMessage({ role: 'user', ...(nativeMessage ? { _meta: { 'openai/message': { target: 'active', send: true } } } : {}), content: [{ type: 'text', text: `Explain this chess review move in plain language. Selected state: ${JSON.stringify(snapshot)}. Read get_review_context for this explicit session and require revision ${snapshot.revision} and FEN ${snapshot.fen} before explaining; if it changed, stop and ask me to select the move again. Use checked position evidence and legal lines. Explain the move classification and one concrete better idea only when supported by checked evidence. Do not invent engine facts, change the board, start a retry, or change game scores. Then call publish_coaching_note with sessionId and expectedRevision from this selected state, and a short plain-language text (one idea plus one concrete cue; at most 280 characters) so I can see it on the board. If revision or FEN changed, do not publish a note for a different position. Keep the chat explanation short and useful.` }] }, { timeout: 10000 });
+    if (contextRevision !== snapshot.revision || acknowledgedCoachingRequest!==request.requestId) throw new Error('The selected position is still connecting to chat. Try Explain this move again when connected.');
+    const result = await sendMessage({ role: 'user', ...(nativeMessage ? { _meta: { 'openai/message': { target: 'active', send: true } } } : {}), content: [{ type: 'text', text: 'Explain this move and show the key idea on my review board.' }] }, { timeout: 10000 });
     if (result?.isError) throw new Error('The host rejected the coaching request. Ask “explain this move” in the native chat.');
     if (state.sessionId === snapshot.sessionId && state.revision === snapshot.revision && !retryHidden()) { lastExplained = evidenceKey(); el('coach-message').textContent = 'Explanation requested in chat.'; el('coach-message').hidden = false; }
   } catch (error) { reportError(error); }
@@ -402,11 +439,12 @@ function renderLearning(hidden) {
   const saved = hidden || state.retry ? [] : learning.savedMistakes || [];
   el('learning-panel').hidden = hidden || Boolean(state.retry);
   el('learning-title').textContent = 'History';
-  el('saved-mistakes').replaceChildren(...saved.slice(0, 5).map(item => {
+  const mistakes = saved.slice(0,5);
+  retainChildren('saved-mistakes',[mistakes,catalog.games],()=>mistakes.map(item => {
     const game = catalog.games.find(game => game.id === item.gameId);
     const opponent = game && (game.playerColor === 'black' ? game.white?.username : game.black?.username);
     return momentButton(`${opponent ? `${opponent} · ` : ''}${moveLabel(item.ply)} · ${item.classification?.label || 'Mistake'}`, () => void openSavedMistake(item), manualInFlight || !canonicalSynced || Boolean(pendingPromotion));
-  }));
+  }),button=>{button.disabled=manualInFlight || !canonicalSynced || Boolean(pendingPromotion);});
   const groups = learning.progress?.groups || [];
   const group = groups.find(item => item.timeClass === state.game?.timeClass && item.timeControl === state.game?.timeControl);
   el('progress').textContent = hidden || state.retry ? '' : group ? `${group.statement}${group.evidenceStatus === 'insufficient_history' ? ' More reviewed games are needed to compare progress.' : ''}` : 'Review imported games to build comparable history.';
@@ -517,6 +555,7 @@ function render(next, { publish = true } = {}) {
   if (!next?.sessionId || !Number.isInteger(next.revision)) throw new Error('The review has no valid session or revision.');
   if (state && next.sessionId !== state.sessionId) throw new Error('This view received a different review session.');
   if (state && next.revision < state.revision) return false;
+  if (coachingRequest && !requestMatches(coachingRequest,next)) { coachingRequest=undefined;acknowledgedCoachingRequest=undefined; }
   const boardPosition = value => JSON.stringify({ gameId: value.gameId, selectedPly: value.selectedPly, fen: value.fen, variation: value.variation || [], retryId: value.retry?.retryId });
   if (state && boardPosition(state) !== boardPosition(next)) ground?.cancelMove?.();
   if (pendingPromotion && (next.sessionId !== pendingPromotion.sessionId || next.revision !== pendingPromotion.revision)) pendingPromotion = undefined;
@@ -537,9 +576,9 @@ function render(next, { publish = true } = {}) {
     // viewOnly cannot be changed through Chessground.set. Bind once, and gate
     // movement with canonical legal destinations and movable color instead.
     viewOnly: false, coordinates: true, coordinatesOnSquares: false, ranksPosition: 'left',
-    animation: { enabled: false }, drawable: { enabled: false, visible: true, autoShapes },
+    animation: { enabled: !reducedMotion?.matches, duration: 180 }, drawable: { enabled: false, visible: true, autoShapes },
     movable: { free: false, color: interactive ? turnColor : undefined, dests, showDests: true, rookCastle: false, events: { after: (from, to) => onBoardMove(from, to, snapshot) } },
-    premovable: { enabled: false }, draggable: { enabled: interactive }, lastMove: undefined,
+    premovable: { enabled: false }, draggable: { enabled: interactive }, lastMove: lastMoveSquares(),
   };
   if (ground) ground.set(boardConfig);
   else ground = Chessground(el('board'), boardConfig);
@@ -550,9 +589,9 @@ function render(next, { publish = true } = {}) {
   el('board-instruction').textContent = state.retry ? 'Move a piece to try again' : 'Move a piece to explore';
   el('position').textContent = state.retry ? `Retry move ${Math.ceil(state.retry.ply / 2)}` : state.variation?.length ? state.variation.join(' ') : state.selectedPly ? moveLabel(state.selectedPly, state.playedMoves?.[state.selectedPly - 1] || '') : 'Start position';
   el('position').title = state.variation?.length ? `Variation from played ply ${state.selectedPly}: ${state.variation.join(' ')}` : '';
-  el('previous').disabled = !state.variation?.length && state.selectedPly === 0 || manualInFlight;
+  el('previous').disabled = !state.variation?.length && navigationPly() === 0 || navigationBlocked();
   const totalPlies = state.totalPlies ?? state.playedMoves?.length;
-  el('next').disabled = manualInFlight || (Number.isInteger(totalPlies) && state.selectedPly >= totalPlies);
+  el('next').disabled = navigationBlocked() || (Number.isInteger(totalPlies) && navigationPly() >= totalPlies);
   el('return').disabled = manualInFlight;
   el('show-variation').disabled = manualInFlight;
   el('summary').textContent = retryHidden() ? '' : state.sourceLabel || '';
@@ -567,27 +606,34 @@ function render(next, { publish = true } = {}) {
   return true;
 }
 
+function requestMatches(request,snapshot) {
+  return request.sessionId===snapshot.sessionId && request.gameId===snapshot.gameId && request.revision===snapshot.revision && request.selectedPly===snapshot.selectedPly && request.fen===snapshot.fen && JSON.stringify(request.variation)===JSON.stringify(snapshot.variation || []);
+}
 function queueContext(snapshot) {
   if (!canonicalSynced) return;
   pendingContext = snapshot;
   void publishContext();
 }
 
-async function publishContext() {
-  if (!connected || !canonicalSynced || contextInFlight || !pendingContext || disposed || Date.now() < contextRetryAfter) return;
+function publishContext() {
+  if (contextPublication) return contextPublication;
+  if (!connected || !canonicalSynced || !pendingContext || disposed || Date.now() < contextRetryAfter) return;
   if (!extensions.modelContext) { redrawStatus(); return; }
-  contextInFlight = true;
+  contextPublication=(async () => {
   try {
     while (pendingContext && !disposed) {
       const snapshot = pendingContext;
       pendingContext = undefined;
+      const request=coachingRequest && requestMatches(coachingRequest,snapshot) ? coachingRequest : undefined;
+      const instructions=request ? `\nCoaching request from this mount: ${request.requestId}, requested at ${request.requestedAt}. The next brief Explain message refers to this exact request. If multiple mounts have requests, resolve this explicit request; stop if concurrent requests are ambiguous. Read get_review_context for session ${request.sessionId} and require revision ${request.revision} and FEN ${request.fen} before explaining. If it changed, stop. Use checked position evidence and legal lines. Explain the move classification and one concrete better idea only when supported by checked evidence. Do not invent engine facts, change the board, start a retry, or change game scores. Then call publish_coaching_note with this sessionId and expectedRevision, with one idea and one concrete cue in plain language, at most 280 characters. Do not publish for a changed position. Keep the chat explanation short and useful.` : '';
       const acknowledgement = await extensions.modelContext.update({
-        content: [{ type: 'text', text: `Current chess review ${snapshot.sessionId}, revision ${snapshot.revision}, selected ply ${snapshot.selectedPly}. ${snapshot.summary || ''}\nFEN: ${snapshot.fen}\nUse semantic chess tools with this explicit session and revision.` }],
-        structuredContent: { ...snapshot, mountId },
+        content: [{ type: 'text', text: `Current chess review ${snapshot.sessionId}, revision ${snapshot.revision}, selected ply ${snapshot.selectedPly}. ${snapshot.summary || ''}\nFEN: ${snapshot.fen}\nUse semantic chess tools with this explicit session and revision.${instructions}` }],
+        structuredContent: { ...snapshot, mountId,...(request ? {coachingRequest:request} : {}) },
       }, { timeout: 10000 });
       if (acknowledgement?.updateId && state?.sessionId === snapshot.sessionId && state.revision === snapshot.revision) {
         contextRevision = snapshot.revision;
         contextUpdateId = acknowledgement.updateId;
+        if (request && coachingRequest===request && requestMatches(request,state)) acknowledgedCoachingRequest=request.requestId;
       } else if (!acknowledgement?.updateId) {
         throw new Error('The host did not acknowledge the selected-position context.');
       }
@@ -600,12 +646,14 @@ async function publishContext() {
   } catch (error) {
     // Retry the latest rendered state, including navigation that happened while
     // the failed host request was in flight. The normal sync loop bounds retries.
-    if (state && contextRevision !== state.revision) pendingContext = state;
+    if (state && (contextRevision !== state.revision || coachingRequest && acknowledgedCoachingRequest!==coachingRequest.requestId)) pendingContext = state;
     contextRetryAfter = Date.now() + contextRetryDelay;
     contextRetryDelay = Math.min(contextRetryDelay * 2, 15000);
     contextFailure = error?.message || String(error);
     reportError(error);
-  } finally { contextInFlight = false; }
+  } finally { contextPublication=undefined; }
+  })();
+  return contextPublication;
 }
 
 async function sync() {
@@ -639,7 +687,32 @@ function scheduleSync() {
   if (!disposed) pollTimer = setTimeout(async () => { await sync(); scheduleSync(); }, pollDelay);
 }
 
-async function mutate(name, args = {}) {
+async function navigateTo(ply) {
+  if (!state || navigationBlocked() || !Number.isInteger(ply)) return;
+  const total = state.totalPlies ?? state.playedMoves?.length;
+  const target = Math.max(0,Number.isInteger(total) ? Math.min(ply,total) : ply);
+  if (!navigationIntent) navigationIntent = {sessionId:state.sessionId,gameId:state.gameId,ply:target};
+  else navigationIntent.ply = target;
+  if (navigationRun) { render(state,{publish:false}); return navigationRun; }
+  // One outstanding guarded commit plus one replaceable destination. The board
+  // continues displaying committed state while repeated clicks update intent.
+  navigationRun = (async () => {
+    let committed;
+    try {
+      while (navigationIntent && !disposed) {
+        const intent = {...navigationIntent};
+        if (state.sessionId !== intent.sessionId || state.gameId !== intent.gameId || retryHidden()) break;
+        committed = await mutate('go_to_move',{ply:intent.ply},true);
+        if (!committed || state.sessionId !== intent.sessionId || state.gameId !== intent.gameId ||
+            state.selectedPly !== committed.selectedPly || state.fen !== committed.fen || JSON.stringify(state.variation) !== JSON.stringify(committed.variation)) break;
+        if (navigationIntent.ply === intent.ply) return committed;
+      }
+    } finally { navigationIntent=undefined;navigationRun=undefined;if(state)render(state,{publish:false}); }
+  })();
+  return navigationRun;
+}
+async function mutate(name, args = {}, navigationCommit = false) {
+  if (name === 'go_to_move' && !navigationCommit) return navigateTo(args.ply);
   if (!state || !canonicalSynced || manualInFlight || pendingPromotion) return;
   const fingerprint = value => JSON.stringify({ sessionId: value.sessionId, gameId: value.gameId, selectedPly: value.selectedPly, fen: value.fen, variation: value.variation || [], retryId: value.retry?.retryId, attemptRevision: value.retry?.attemptRevision });
   const intentPosition = fingerprint(state), intentRevision = state.revision;
@@ -661,14 +734,14 @@ async function mutate(name, args = {}) {
       clearError();
       result = await issue();
     }
-    if (state.sessionId === sessionId) { render(result.state || result); committed = state; if (intentDrawer && intentDrawer !== 'game-picker-title' && activeDrawer === intentDrawer) { closeDrawers(); el('position').focus(); } }
+    if (state.sessionId === sessionId && render(result.state || result)) { committed = state; if (intentDrawer && intentDrawer !== 'game-picker-title' && activeDrawer === intentDrawer) { closeDrawers(); el('position').focus(); } }
   } catch (error) { reportError(error); await sync(); }
   finally { manualInFlight = false; if (state) render(state, { publish: false }); }
   return committed;
 }
 
-el('previous').addEventListener('click', () => { if (state) void (state.variation?.length ? state.variation.length === 1 ? mutate('return_to_game') : mutate('show_variation', { moves: state.variation.slice(0, -1) }) : mutate('go_to_move', { ply: Math.max(0, state.selectedPly - 1) })); });
-el('next').addEventListener('click', () => { if (state) void mutate('go_to_move', { ply: state.selectedPly + 1 }); });
+el('previous').addEventListener('click', () => { if (state) void (state.variation?.length ? state.variation.length === 1 ? mutate('return_to_game') : mutate('show_variation', { moves: state.variation.slice(0, -1) }) : mutate('go_to_move', { ply: Math.max(0, navigationPly() - 1) })); });
+el('next').addEventListener('click', () => { if (state) void mutate('go_to_move', { ply: navigationPly() + 1 }); });
 el('return').addEventListener('click', () => { const ply = comparisonAnchor?.ply; comparisonAnchor = undefined; void (ply ? mutate('go_to_move', { ply }) : mutate('return_to_game')); });
 el('import-form').addEventListener('submit', event => { event.preventDefault(); void loadCatalog({ refresh: true, selectImported: true }); });
 el('game-picker-title').addEventListener('click', () => setGamePicker(el('game-picker').hidden));
@@ -723,14 +796,54 @@ document.addEventListener('keydown', event => {
   if (event.key === 'ArrowRight') { event.preventDefault(); el('next').click(); }
 });
 document.addEventListener('visibilitychange', () => { if (!document.hidden) { void sync(); scheduleSync(); } });
-window.addEventListener('pagehide', () => { disposed = true; clearTimeout(pollTimer); ground?.destroy(); });
+window.addEventListener('pagehide', () => { disposed = true; clearTimeout(pollTimer);clearTimeout(launchTimer);ground?.destroy(); });
 app.addEventListener('hostcontextchanged', applyHostContext);
+app.ontoolinput = params => {
+  if (launchReceived || state) return;
+  try {
+    const input = params.arguments || {}, next = {};
+    for (const key of ['sessionId','gameId']) if (key in input) {
+      if (typeof input[key] !== 'string' || !input[key].trim()) throw new Error(`The launch ${key} is invalid. Reopen the review with its saved session or game.`);
+      next[key] = input[key];
+    }
+    launchArguments = next;launchInputError=undefined;
+  } catch(error) { launchInputError=error;reportError(error); }
+};
 app.ontoolresult = result => {
+  if (launchReceived || state || disposed) return;
   try {
     const payload = unpack(result);
-    if (!launchReceived) { launchReceived = true; render(payload.state || payload, { publish: false }); }
+    if (render(payload.state || payload, { publish: false })) {
+      launchReceived = true;clearTimeout(launchTimer);el('retry-launch').hidden=true;
+      if (connected) void sync();
+    }
   } catch (error) { reportError(error); }
 };
+async function recoverLaunch() {
+  if (!connected || disposed || launchRecoveryInFlight || canonicalSynced) return;
+  launchRecoveryInFlight=true;el('retry-launch').disabled=true;clearError();
+  try {
+    if (!state && !launchReceived) {
+      if (launchInputError) throw launchInputError;
+      const args={...launchArguments}, identity=JSON.stringify(args);
+      el('status').textContent='Opening this review…';
+      // {} is open_review's declared verification-fixture default. Never infer
+      // a session from another mount, the catalog, or neighboring global view.
+      const result=unpack(await app.callServerTool({name:'open_review',arguments:args},{timeout:10000}));
+      if (disposed || launchReceived || state) return;
+      if (identity!==JSON.stringify(launchArguments)) throw new Error('The launch arguments changed. Retry opening this review.');
+      const next=result.state || result;
+      if (args.sessionId && next.sessionId!==args.sessionId || args.gameId && next.gameId!==args.gameId) throw new Error('The returned review does not match the requested saved session or game.');
+      render(next,{publish:false});launchReceived=true;clearTimeout(launchTimer);
+    }
+    await sync();
+    if (!canonicalSynced) throw new Error('The saved review could not be confirmed with its backend.');
+    el('retry-launch').hidden=true;clearError();
+  } catch(error) {
+    if (!canonicalSynced) { reportError(new Error(`Could not open this review. Retry opening review. ${error.message || error}`));el('retry-launch').hidden=false;el('status').textContent='Review launch failed. Retry opening review.'; }
+  } finally { launchRecoveryInFlight=false;el('retry-launch').disabled=false; }
+}
+el('retry-launch').addEventListener('click',()=>void recoverLaunch());
 
 async function start() {
 try {
@@ -745,7 +858,7 @@ try {
   scheduleSync();
   await loadCatalog();
   if (catalog.username) void loadCatalog({ refresh: true, username: catalog.username });
-  if (!state) el('status').textContent = 'Waiting for the review launch state…';
+  if (!state) { el('status').textContent = 'Waiting for the review launch state…';launchTimer=setTimeout(()=>recoverLaunch(),2500); }
 } catch (error) { reportError(error); el('status').textContent = 'Native connection unavailable.'; }
 }
 void start();

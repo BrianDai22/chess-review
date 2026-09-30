@@ -82,9 +82,13 @@ try {
   await blocked(client, 'refresh_games', {}, /username first/i);
   record('tool discovery and empty username', 'No guessed username or network import');
 
-  const resource = await client.readResource({ uri: 'ui://chess-review/review' });
+  const resourceUri = tools.tools.find(tool => tool.name === 'open_review')._meta.ui.resourceUri;
+  assert.match(resourceUri, /^ui:\/\/chess-review\/review-[a-f0-9]{16}\.html$/);
+  const resource = await client.readResource({ uri: resourceUri });
   const html = resource.contents.find(item => item.mimeType === 'text/html;profile=mcp-app');
   assert.ok(html?.text);
+  const legacyResource = await client.readResource({uri:'ui://chess-review/review'});
+  assert.equal(legacyResource.contents[0].text, html.text);
   assert.equal((html.text.match(/data:image\/svg\+xml;base64/g) || []).length, 12);
   for (const role of ['pawn', 'knight', 'bishop', 'rook', 'queen', 'king']) {
     assert.ok(html.text.includes(`piece.${role}.white`)); assert.ok(html.text.includes(`piece.${role}.black`));
