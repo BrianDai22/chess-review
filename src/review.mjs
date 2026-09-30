@@ -30,13 +30,20 @@ export class Reviews {
     if (sessionId) {
       const state = this.context(sessionId);
       if (gameId && state.gameId !== gameId) throw new Error('Game and session identity conflict');
-      return state;
+      return this.analyzeNewGame(state);
     }
     gameId ??= FIXTURE_ID;
     if (!this.store.getGame(gameId)) throw new Error('Game not found');
     const id = randomUUID();
     this.store.set('sessions', id, { sessionId: id, gameId, selectedPly: 0, variation: [], revision: 1, createdAt: Date.now() });
-    return this.context(id);
+    return this.analyzeNewGame(this.context(id));
+  }
+  analyzeNewGame(state) {
+    if (state.analysis.readiness === 'pending' && this.analysis?.start) {
+      this.analysis.start(state.gameId);
+      return this.context(state.sessionId);
+    }
+    return state;
   }
   context(id) {
     let s = requireSession(this.store, id);
@@ -53,7 +60,7 @@ export class Reviews {
     const assessment = e => e && Object.fromEntries(['ready','exact','cp','mate','winner','terminal','profileId','profile','budget','fen','sideToMove','bestMove','depth','nodes'].filter(k => e[k] !== undefined).map(k => [k,e[k]]).concat([['pv',(e.pv || []).slice(0,12)]]));
     const selected = fullAnalysis.moves?.find(m => m.ply === s.selectedPly);
     const analysis = { readiness: fullAnalysis.readiness, completedPositions: fullAnalysis.completedPositions, totalPositions: fullAnalysis.totalPositions,
-      error: fullAnalysis.error, profile: fullAnalysis.profile,
+      error: fullAnalysis.error, profile: fullAnalysis.profile, phase: fullAnalysis.phase, currentMove: fullAnalysis.currentMove, totalMoves: fullAnalysis.totalMoves,
       ...(!hidden && fullAnalysis.readiness === 'ready' ? { accuracy: fullAnalysis.accuracy, playerAccuracy: fullAnalysis.playerAccuracy,
         currentPosition: s.variation.length ? null : assessment(fullAnalysis.positions?.[s.selectedPly]),
         selectedMove: selected && { ply:selected.ply,color:selected.color,san:selected.san,uci:selected.uci,classification:selected.classification,
@@ -79,7 +86,7 @@ export class Reviews {
     return this.context(sessionId);
   }
   go(args) { return this.mutate(args, s => { replay(this.store.getGame(s.gameId), args.ply); return { ...s, selectedPly: args.ply, variation: [], retryId: undefined }; }); }
-  select(args) { return this.mutate(args, s => { const game=this.store.getGame(args.gameId);if (!game) throw new Error('Game not found');replay(game,0);return {...s,gameId:args.gameId,selectedPly:0,variation:[],retryId:undefined}; }); }
+  select(args) { return this.analyzeNewGame(this.mutate(args, s => { const game=this.store.getGame(args.gameId);if (!game) throw new Error('Game not found');replay(game,0);return {...s,gameId:args.gameId,selectedPly:0,variation:[],retryId:undefined}; })); }
   endRetry(args) { return this.mutate(args, s => ({...s,retryId:undefined,variation:[]})); }
   variation(args) {
     return this.mutate(args, s => {

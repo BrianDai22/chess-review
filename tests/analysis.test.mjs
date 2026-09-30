@@ -58,7 +58,11 @@ test('interruption retains exact cached work, fabricates no score, and recovery 
   const resumedEngine = new ControlledEngine();
   const ready = await new Analysis({ store, engine: resumedEngine }).run('game');
   assert.equal(ready.readiness, 'ready');
-  assert.equal(resumedEngine.calls.some(call => call.moves.length === 0 && !call.searchMoves.length), false);
+  const cached=store.get('analysis-work',ready.analysisKey).cache;
+  // Failure left exact work from the other concurrent worker. Its previously
+  // completed request must not be searched again on resume.
+  assert.ok(Object.values(cached).some(e=>e.moves.length===1&&e.profile==='ordinary'));
+  assert.equal(resumedEngine.calls.some(call=>call.moves.length===1&&call.profile==='ordinary'&&!call.searchMoves.length),false);
 });
 test('independent Store/Analysis instances serialize one game and do not duplicate engine work', async t => {
   const { store, dir } = setup(t); const secondStore = new Store({ dataDir: dir }); t.after(() => secondStore.close());
@@ -143,4 +147,38 @@ test('custom FEN game uses its actual initial canonical assessment in Lichess ag
   assert.equal(result.readiness,'ready');
   assert.deepEqual(result.accuracy,gameAccuracy(result.positions.slice(1),{initial:result.positions[0]}));
   assert.equal(result.accuracy.w,100);
+});
+test('position workers run concurrently but remain bounded at two and retain phase progress',async t=>{
+  const {store}=setup(t);
+  class DelayedEngine extends ControlledEngine {
+    active=0;maximum=0;
+    async analyze(request){this.active++;this.maximum=Math.max(this.maximum,this.active);try{
+      await new Promise(resolve=>setTimeout(resolve,10));return await super.analyze(request);
+    }finally{this.active--;}}
+  }
+  const engine=new DelayedEngine(),analysis=new Analysis({store,engine});
+  const phases=[];const original=analysis.publish.bind(analysis);
+  analysis.publish=(input,record,guard)=>{phases.push({phase:record.phase,move:record.currentMove});return original(input,record,guard);};
+  const result=await analysis.run('game');
+  assert.equal(result.readiness,'ready');assert.equal(engine.maximum,2);assert.equal(engine.active,0);
+  assert.ok(phases.some(p=>p.phase==='positions'));assert.deepEqual(phases.filter(p=>p.phase==='moves').map(p=>p.move),[1,2]);
+  assert.equal(analysis.status('game').phase,'complete');assert.equal(analysis.status('game').totalMoves,2);
+});
+test('parallel search failure settles its peer before terminal publication and leaves no late cache writes',async t=>{
+  const {store}=setup(t);
+  class RaceEngine extends ControlledEngine {
+    active=0;maximum=0;
+    async analyze(request){this.active++;this.maximum=Math.max(this.maximum,this.active);try{
+      if(request.moves.length===0){await new Promise(resolve=>setTimeout(resolve,5));throw new Error('Position search failed');}
+      await new Promise(resolve=>setTimeout(resolve,40));return await super.analyze(request);
+    }finally{this.active--;}}
+  }
+  const engine=new RaceEngine(),analysis=new Analysis({store,engine});
+  const failed=await analysis.run('game');
+  assert.equal(failed.readiness,'failed');assert.match(failed.error,/Position search failed/);assert.equal(engine.maximum,2);assert.equal(engine.active,0);
+  assert.equal(failed.accuracy,undefined);
+  const snapshot=JSON.stringify(store.get('analysis-work',failed.analysisKey));
+  await new Promise(resolve=>setTimeout(resolve,60));
+  assert.equal(JSON.stringify(store.get('analysis-work',failed.analysisKey)),snapshot);
+  assert.equal(store.db.prepare('SELECT COUNT(*) AS n FROM leases').get().n,0);
 });

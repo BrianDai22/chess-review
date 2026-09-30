@@ -99,6 +99,17 @@ try {
   assert.notEqual(first.sessionId, second.sessionId);
   const gameId = first.gameId;
   const originalPgn = readRecord('games', gameId).pgn;
+  const deadline = Date.now() + 120000;
+  while (first.analysis.readiness !== 'ready') {
+    assert.equal(first.analysis.playerAccuracy, undefined, 'Partial analysis must not publish a final accuracy');
+    assert.equal(first.analysis.accuracy, undefined, 'Neither player gets a final partial score');
+    if (['failed', 'interrupted'].includes(first.analysis.readiness)) throw new Error(`Canonical analysis ${first.analysis.readiness}: ${first.analysis.error}`);
+    assert.ok(Date.now() < deadline, 'Automatic analysis did not finish within 120 seconds');
+    await waitBriefly(250);
+    first = await call(client, 'get_review_context', { sessionId: first.sessionId });
+  }
+  assert.ok(Number.isFinite(first.analysis.accuracy.w));
+  assert.ok(Number.isFinite(first.analysis.accuracy.b));
   const oldRevision = first.revision;
   first = await call(client, 'go_to_move', { ...guard(first), ply: 1 });
   await blocked(client, 'go_to_move', { sessionId: first.sessionId, expectedRevision: oldRevision, ply: 2 }, /stale revision/i);
@@ -117,21 +128,14 @@ try {
   record('session isolation and stale guards', 'Variation preserved played line; no fabricated UI/context acknowledgement');
 
   first = await call(client, 'analyze_game', guard(first));
-  const deadline = Date.now() + 120000;
-  while (first.analysis.readiness !== 'ready') {
-    assert.equal(first.analysis.playerAccuracy, undefined, 'Partial analysis must not publish a final accuracy');
-    if (['failed', 'interrupted'].includes(first.analysis.readiness)) throw new Error(`Canonical analysis ${first.analysis.readiness}: ${first.analysis.error}`);
-    assert.ok(Date.now() < deadline, 'Canonical analysis did not finish within 120 seconds');
-    await waitBriefly(250);
-    first = await call(client, 'get_review_context', { sessionId: first.sessionId });
-  }
+  assert.equal(first.analysis.readiness, 'ready', 'Completed automatic analysis is reused');
   assert.ok(Number.isFinite(first.analysis.playerAccuracy));
   assert.equal(first.analysis.completedPositions, first.analysis.totalPositions);
   const originalAccuracy = first.analysis.playerAccuracy;
   const frozenAnalysis = JSON.stringify(readRecord('analyses', gameId));
   second = await call(client, 'get_review_context', { sessionId: second.sessionId });
   assert.equal(second.selectedPly, 0);
-  record('complete pinned-engine game analysis', `${first.analysis.totalPositions} positions, accuracy ${originalAccuracy.toFixed(3)}`);
+  record('automatic pinned-engine game analysis', `${first.analysis.totalPositions} positions; white ${first.analysis.accuracy.w.toFixed(3)}, black ${first.analysis.accuracy.b.toFixed(3)}`);
 
   first = await call(client, 'start_retry', { ...guard(first), ply: 7 });
   assert.equal(first.selectedPly, 6);

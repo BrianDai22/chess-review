@@ -20,9 +20,11 @@ Open **Plugins → Chess Review → Open plugin**, or its **Review Board** sideb
 ## Use
 
 1. Open Games, enter your Chess.com username, and import recent completed standard games. The username is remembered after a successful refresh. Brian's username is initially unset; the labeled verification fixture is available for checking setup.
-2. Select a game and choose Analyze. Local analysis reports progress, then shows player accuracy, move classifications, and key moments. An interrupted job offers Resume and preserves completed evidence.
-3. Navigate the played line and ask native chat about the selected position. Coaching checks evidence and alternatives through semantic chess tools; demonstrated variations leave the original game untouched. Moving a piece during ordinary review creates a variation; Return to game restores the played position.
-4. Retry an analyzed player move. Click or drag a legal move on the board, or submit SAN (`Nf3`) or from-to notation (`g1f3`). Promotions offer an explicit piece choice. The answer stays hidden until an attempt or reveal. Hints, first attempts, sound alternatives, and prior answer exposure are recorded separately; retries do not change the original score.
+2. Select a game. Local analysis starts automatically, reports progress, then shows both players' accuracy, move classifications, and key moments. A failed or interrupted job offers Resume and preserves completed evidence.
+3. Click or drag pieces to explore. Engine guidance shows the checked best-move arrow; Play best move and Play next let you follow a continuation without typing notation. Previous steps back through your variation; Return to game restores the played position. Native chat can explain the selected position and demonstrate checked alternatives on the same board.
+4. Retry an analyzed player move and click or drag your attempt. Promotions offer an explicit piece choice; Keyboard moves provides an optional accessible input. The answer stays hidden until an attempt or reveal. Hints, first attempts, sound alternatives, and prior answer exposure are recorded separately; retries do not change the original score.
+
+The board and primary controls fit the review pane. Games, saved history, and keyboard input open over the workspace rather than adding a long page below the board.
 
 Saved mistakes and comparable history use actual imported games under the same scoring version and exact time control. The fixture supplies no personal progress. Multiple open boards have explicit, independent sessions. To restore a particular session in native chat, ask to reopen its session ID from the attached review context.
 

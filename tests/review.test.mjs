@@ -13,6 +13,36 @@ function setup(t) {
   return { dataDir, store, reviews: new Reviews(store) };
 }
 const storedGame = (id, pgn) => ({ id, pgn, playerColor: 'white', sourceLabel: 'Legal replay fixture', white: { username: 'White' }, black: { username: 'Black' }, timeClass: 'fixture' });
+test('opening or selecting a new game starts analysis automatically, but never resumes a failed job implicitly', t => {
+  const { store } = setup(t), started = [];
+  const statuses = new Map();
+  const analysis = {
+    status: gameId => ({ readiness: statuses.get(gameId) || 'pending' }),
+    start: gameId => {
+      started.push(gameId); statuses.set(gameId, 'analyzing');
+      for (const session of store.list('sessions')) if (session.gameId === gameId) store.set('sessions', session.sessionId, { ...session, revision: session.revision + 1 });
+    }
+  };
+  const reviews = new Reviews(store, { analysis });
+  let state = reviews.open();
+  assert.deepEqual(started, [FIXTURE_ID]);
+  assert.equal(state.analysis.readiness, 'analyzing'); assert.equal(state.revision, 2);
+  assert.equal(state.analysis.playerAccuracy, undefined);
+  reviews.open({ sessionId: state.sessionId });
+  assert.equal(started.length, 1);
+  for (const readiness of ['failed', 'interrupted', 'ready']) {
+    statuses.set(FIXTURE_ID, readiness);
+    assert.equal(reviews.open({ sessionId: state.sessionId }).analysis.readiness, readiness);
+    assert.equal(started.length, 1);
+  }
+  store.set('games', 'new-game', storedGame('new-game', '1. e4 e5 *'));
+  assert.throws(() => reviews.select({ sessionId: state.sessionId, expectedRevision: 1, gameId: 'new-game' }), /Stale revision/);
+  assert.equal(started.length, 1);
+  state = reviews.select({ sessionId: state.sessionId, expectedRevision: state.revision, gameId: 'new-game' });
+  assert.equal(state.gameId, 'new-game'); assert.equal(state.analysis.readiness, 'analyzing');
+  assert.deepEqual(started, [FIXTURE_ID, 'new-game']);
+  assert.equal(state.revision, 4);
+});
 test('replay performs castling, en passant, promotion, mate, and repetition legally', () => {
   const castle = replay(storedGame('castle', '1. e4 e5 2. Nf3 Nc6 3. Bc4 Bc5 4. O-O *'), 7).chess;
   assert.deepEqual(castle.get('g1'), { type: 'k', color: 'w' });

@@ -23,10 +23,12 @@ export function replayPosition(initialFen = DEFAULT_POSITION, moves = []) {
 }
 
 export function selectCompletedEvidence({ last, lastExact, bestMove }) {
-  const chosen = last?.exact && last.pv?.[0] === bestMove ? last : lastExact?.pv?.[0] === bestMove ? lastExact : null;
+  const chosen = last?.exact ? last : lastExact?.exact ? lastExact : null;
   const finalPartialIteration = last && last !== chosen ? { ...last } : null;
-  return chosen ? { ...chosen, ready: true, selection: 'completed-exact', searchedNodes: last.nodes, finalPartialIteration }
-    : { ...last, ready: false, exact: false, selection: 'pending', searchedNodes: last?.nodes || 0, finalPartialIteration };
+  return chosen ? { ...chosen, ready: true, bestMove: chosen.pv[0], finalBestMove: bestMove,
+    selection: 'completed-exact', searchedNodes: last.nodes, finalPartialIteration }
+    : { ...last, ready: false, exact: false, bestMove, finalBestMove: bestMove,
+      selection: 'pending', searchedNodes: last?.nodes || 0, finalPartialIteration };
 }
 
 export class Engine {
@@ -102,9 +104,10 @@ export class Engine {
             const bestMove = line.split(/\s+/)[1];
             if (!last || !legal.includes(bestMove)) { finish(new Error('Engine returned no usable legal evaluation')); continue; }
             const selected = selectCompletedEvidence({ last, lastExact, bestMove });
+            if (!legal.includes(selected.bestMove) || (searchMoves.length && !searchMoves.includes(selected.bestMove))) { finish(new Error('Engine completed iteration returned an invalid root move')); continue; }
             try { replayPosition(initialFen, [...moves, ...selected.pv]); }
             catch { finish(new Error('Engine returned an illegal continuation')); continue; }
-            finish(null, { ...evidence, ...selected, bestMove, elapsedMs: performance.now() - started });
+            finish(null, { ...evidence, ...selected, elapsedMs: performance.now() - started });
           }
         }
       });

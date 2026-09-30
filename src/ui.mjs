@@ -1,6 +1,7 @@
 import { App, applyDocumentTheme, applyHostStyleVariables } from '@modelcontextprotocol/ext-apps';
 import { OpenAIExtensions } from '@openai/mcp-extensions/app';
 import { Chessground } from '@lichess-org/chessground';
+import { Chess } from 'chess.js';
 
 const pieceNames = { k: 'king', q: 'queen', r: 'rook', b: 'bishop', n: 'knight', p: 'pawn' };
 const app = new App({ name: 'Chess Review', version: '0.1.0' });
@@ -29,33 +30,40 @@ let catalogInFlight = false;
 let catalogRequest = 0;
 let catalogInitialized = false;
 let pendingPromotion;
+let engineEnabled = true;
+let positionEvidence;
+let evidenceRequest = 0;
+let evidencePending;
+let evidenceAttempted;
+let evidenceError;
+let activeDrawer;
+const guideExposures = new Set();
 
 document.body.innerHTML = `<main class="review" aria-label="Chess review">
   <header class="workspace-header"><h1>Chess Review</h1><button class="btn btn-secondary" id="game-picker-title" type="button" aria-expanded="false" aria-controls="game-picker">Games</button></header>
-  <section id="game-picker" class="game-picker" aria-label="Game selection" hidden>
-    <div class="picker-content"><label class="form-label" for="game">Completed games</label><select id="game" class="form-control" disabled><option>Loading games…</option></select>
-    <form id="import-form"><label class="form-label" for="username">Chess.com username</label><div class="import-row"><input id="username" class="form-control" autocomplete="off" autocapitalize="none" spellcheck="false" placeholder="Your public username"/><button id="refresh-games" class="btn btn-primary cursor-interaction" type="submit" disabled>Import games</button></div></form>
-    <p id="catalog-status" class="muted" aria-live="polite"></p></div>
-  </section>
-  <section class="game-identity" aria-label="Current game"><h2 id="game-title">Review game</h2><p id="game-meta" class="muted" hidden></p><p id="game-source" class="source-note" hidden></p></section>
-  <section class="board-workspace" aria-label="Selected position">
-    <div class="player-bar" id="opponent-bar"><span class="player-piece" id="opponent-piece" aria-hidden="true"></span><div class="player-identity"><strong id="opponent-name"></strong><span id="opponent-rating" class="muted"></span></div><span id="opponent-turn" class="turn-indicator" hidden>To move</span></div>
-    <div class="board-shell"><div id="board" class="board cg-wrap" role="img" aria-label="Chess position" aria-describedby="accessible-position"></div></div>
-    <fieldset id="promotion-panel" class="promotion-panel" hidden><legend>Choose promotion</legend><div id="promotion-choices" class="promotion-choices"></div><button id="cancel-promotion" class="btn btn-secondary" type="button">Cancel</button></fieldset>
-    <div class="player-bar" id="player-bar"><span class="player-piece" id="player-piece" aria-hidden="true"></span><div class="player-identity"><strong id="player-name"></strong><span id="player-rating" class="muted"></span></div><span id="player-turn" class="turn-indicator" hidden>To move</span></div>
-    <nav class="move-navigation" aria-label="Played line navigation"><button id="previous" class="btn btn-secondary cursor-interaction" type="button" aria-label="Previous move" disabled>Previous</button><span id="position" tabindex="-1" aria-live="polite">Start position</span><button id="next" class="btn btn-secondary cursor-interaction" type="button" aria-label="Next move" disabled>Next</button></nav>
-    <button id="return" class="btn btn-secondary return-action cursor-interaction" type="button" disabled hidden>Return to played line</button>
-  </section>
-  <section class="review-results" aria-label="Game analysis"><div class="assessment" id="assessment" hidden><div class="metric accuracy-metric" id="accuracy-assessment"><span class="metric-label">Your accuracy</span><strong id="accuracy"></strong></div><div class="metric" id="move-assessment"><span class="metric-label">Selected move</span><strong id="classification" class="classification"></strong></div><div class="metric" id="position-assessment"><span class="metric-label">Position</span><strong id="evaluation"></strong></div></div>
-    <div class="review-actions" id="review-actions"><button id="analyze" class="btn btn-primary cursor-interaction" type="button" disabled>Analyze game</button><div class="analysis-progress" id="analysis-progress" hidden><p id="analysis-status" aria-live="polite"></p><progress id="analysis-meter" aria-label="Game analysis progress" hidden></progress></div><button id="start-retry" class="btn btn-secondary cursor-interaction" type="button" disabled hidden>Retry this move</button></div>
-    <section id="key-moments-panel" aria-label="Key moments" hidden><h2>Key moments</h2><div id="key-moments" class="moment-list"></div></section>
-  </section>
-  <section id="retry-panel" class="retry-panel" aria-label="Retry decision" hidden><h2 id="retry-title">Retry this decision</h2><p id="retry-instruction"></p><form id="retry-form"><label class="form-label" for="retry-move">Your move</label><div class="variation-input"><input id="retry-move" class="form-control" autocomplete="off" spellcheck="false" aria-describedby="retry-format" placeholder="Nf3 or g1f3"/><button id="submit-retry" class="btn btn-primary cursor-interaction" type="submit" disabled>Check move</button></div><span id="retry-format" class="sr-only">Use chess notation, such as Nf3, or from-to notation, such as g1f3.</span></form><p id="retry-feedback" class="retry-feedback" aria-live="polite" hidden></p><p id="retry-answer" class="checked-answer" hidden></p><div class="retry-actions"><button id="retry-hint" class="btn btn-secondary cursor-interaction" type="button" disabled>Hint</button><button id="end-retry" class="btn btn-secondary cursor-interaction" type="button" disabled>Back to review</button></div><details class="retry-record"><summary>Attempt record</summary><p id="retry-history" class="muted"></p></details></section>
-  <div class="secondary-tools"><details id="variation-panel"><summary>Explore a variation</summary><form id="variation-form"><label class="form-label" for="variation">Moves from this position</label><div class="variation-input"><input class="form-control" id="variation" autocomplete="off" aria-label="Variation moves in SAN or from-to notation" placeholder="Nf3 Nc6 or g1f3 b8c6"/><button id="show-variation" class="btn btn-secondary cursor-interaction" type="submit" disabled>Show</button></div></form></details>
-    <details id="learning-panel" class="learning-panel"><summary id="learning-title">Saved mistakes & progress</summary><div id="saved-mistakes" class="moment-list"></div><p id="progress" class="muted"></p></details>
-    <details id="position-details" class="position-details"><summary>Piece locations</summary><p id="accessible-position"></p></details>
+  <section id="game-picker" class="drawer game-picker" aria-label="Game selection" hidden><div class="picker-content"><label class="form-label" for="game">Completed games</label><select id="game" class="form-control" disabled><option>Loading games…</option></select><form id="import-form"><label class="form-label" for="username">Chess.com username</label><div class="import-row"><input id="username" class="form-control" autocomplete="off" autocapitalize="none" spellcheck="false" placeholder="Your public username"/><button id="refresh-games" class="btn btn-primary" type="submit" disabled>Import games</button></div></form><p id="catalog-status" class="muted" aria-live="polite"></p></div></section>
+  <section class="game-identity" aria-label="Current game"><h2 id="game-title">Review game</h2><span id="game-meta" class="muted" hidden></span><span id="game-source" class="source-note" hidden></span></section>
+  <div class="workspace-content" id="workspace-content">
+    <section class="board-workspace" aria-label="Selected position">
+      <div class="player-bar" id="opponent-bar"><span class="player-piece" id="opponent-piece" aria-hidden="true"></span><div class="player-identity"><strong id="opponent-name"></strong><span id="opponent-rating" class="muted"></span></div><span id="opponent-accuracy" class="player-score" hidden></span><span id="opponent-turn" class="sr-only" hidden>To move</span></div>
+      <div class="board-slot"><div class="board-shell"><div id="board" class="board cg-wrap" role="img" aria-label="Chess position" aria-describedby="accessible-position board-instruction"></div></div></div>
+      <fieldset id="promotion-panel" class="promotion-panel" hidden><legend>Choose promotion</legend><div id="promotion-choices" class="promotion-choices"></div><button id="cancel-promotion" class="btn btn-secondary" type="button">Cancel</button></fieldset>
+      <div class="player-bar" id="player-bar"><span class="player-piece" id="player-piece" aria-hidden="true"></span><div class="player-identity"><strong id="player-name"></strong><span id="player-rating" class="muted"></span></div><span id="accuracy-assessment" class="player-score" hidden><span>Accuracy </span><strong id="accuracy"></strong></span><span id="player-turn" class="sr-only" hidden>To move</span></div>
+      <nav class="move-navigation" aria-label="Played line navigation"><button id="previous" class="btn btn-secondary" type="button" aria-label="Previous move" disabled>Previous</button><span id="position" tabindex="-1" aria-live="polite">Start position</span><button id="next" class="btn btn-secondary" type="button" aria-label="Next move" disabled>Next</button></nav>
+      <p id="board-instruction" class="board-instruction">Move a piece to explore</p>
+    </section>
+    <aside class="workbench" aria-label="Review tools">
+      <section id="engine-guide" class="engine-guide" aria-label="Engine guide"><div class="engine-actions"><button id="engine-toggle" class="btn btn-secondary" type="button" aria-pressed="true">Engine on</button><button id="engine-play" class="btn btn-primary" type="button" disabled>Play best move</button><button id="return" class="btn btn-secondary" type="button" disabled hidden>Return to game</button></div><p id="engine-status" class="muted" aria-live="polite"></p><div id="engine-line" class="line-trail" aria-label="Checked engine continuation"></div></section>
+      <div id="variation-trail" class="line-trail" aria-label="Explored moves" hidden></div>
+      <section class="review-results" aria-label="Game analysis"><div class="assessment" id="assessment" hidden><div class="metric" id="move-assessment"><strong id="classification" class="classification"></strong></div><div class="metric" id="position-assessment"><strong id="evaluation"></strong></div></div><div class="review-actions" id="review-actions"><button id="analyze" class="btn btn-primary" type="button" disabled>Analyze game</button><div class="analysis-progress" id="analysis-progress" hidden><p id="analysis-status" aria-live="polite"></p><progress id="analysis-meter" aria-label="Game analysis progress" hidden></progress></div><button id="start-retry" class="btn btn-secondary" type="button" disabled hidden>Retry this move</button></div></section>
+      <section id="key-moments-panel" aria-label="Key moments" hidden><h2>Key moments</h2><div id="key-moments" class="moment-list"></div></section>
+      <section id="retry-panel" class="retry-panel" aria-label="Retry decision" hidden><h2 id="retry-title">Retry this decision</h2><p id="retry-instruction"></p><p id="retry-feedback" class="retry-feedback" aria-live="polite" hidden></p><p id="retry-answer" class="checked-answer" hidden></p><div class="retry-actions"><button id="retry-hint" class="btn btn-secondary" type="button" disabled>Hint</button><button id="end-retry" class="btn btn-secondary" type="button" disabled>Back to review</button></div></section>
+      <p id="error" role="alert" hidden></p>
+    </aside>
   </div>
-  <p id="summary" class="sr-only"></p><p id="side" class="sr-only"></p><p id="status" class="sr-only" aria-live="polite">Connecting to native chat…</p><p id="error" role="alert" hidden></p>
+  <footer class="secondary-tools"><details id="variation-panel"><summary id="keyboard-toggle">Keyboard moves</summary><div class="drawer drawer-content"><form id="variation-form"><label class="form-label" for="variation">Moves from this position</label><div class="variation-input"><input class="form-control" id="variation" autocomplete="off" aria-label="Variation moves in SAN or from-to notation" placeholder="Nf3 Nc6 or g1f3 b8c6"/><button id="show-variation" class="btn btn-secondary" type="submit" disabled>Show</button></div></form><form id="retry-form" hidden><label class="form-label" for="retry-move">Your move</label><div class="variation-input"><input id="retry-move" class="form-control" autocomplete="off" spellcheck="false" aria-describedby="retry-format" placeholder="Nf3 or g1f3"/><button id="submit-retry" class="btn btn-primary" type="submit" disabled>Check move</button></div><span id="retry-format" class="sr-only">Use chess notation, such as Nf3, or from-to notation, such as g1f3.</span><details class="retry-record"><summary>Attempt record</summary><p id="retry-history" class="muted"></p></details></form><details id="position-details" class="position-details"><summary>Piece locations</summary><p id="accessible-position"></p></details></div></details><details id="learning-panel" class="learning-panel"><summary id="learning-title">History</summary><div class="drawer drawer-content"><div id="saved-mistakes" class="moment-list"></div><p id="progress" class="muted"></p></div></details></footer>
+  <p id="summary" class="sr-only"></p><p id="side" class="sr-only"></p><p id="status" class="sr-only" aria-live="polite">Connecting to native chat…</p>
+  <p id="drawer-error" class="drawer-error" role="alert" hidden></p>
 </main>`;
 const el = id => document.getElementById(id);
 for (const id of ['previous', 'next', 'return', 'show-variation', 'analyze', 'start-retry', 'submit-retry', 'retry-hint', 'end-retry', 'refresh-games', 'game']) el(id).disabled = true;
@@ -63,10 +71,19 @@ for (const id of ['previous', 'next', 'return', 'show-variation', 'analyze', 'st
 function reportError(error) {
   el('error').hidden = false;
   el('error').textContent = error?.message || String(error);
+  el('drawer-error').hidden = !activeDrawer;
+  el('drawer-error').textContent = activeDrawer ? el('error').textContent : '';
 }
 
-function clearError() { el('error').hidden = true; el('error').textContent = ''; }
-function setGamePicker(open) { el('game-picker').hidden = !open; el('game-picker-title').setAttribute('aria-expanded', String(Boolean(open))); }
+function clearError() { el('error').hidden = true; el('error').textContent = ''; el('drawer-error').hidden = true; el('drawer-error').textContent = ''; }
+function setGamePicker(open) {
+  el('game-picker').hidden = !open; el('game-picker-title').setAttribute('aria-expanded', String(Boolean(open)));
+  if (open) { el('variation-panel').open = false; el('learning-panel').open = false; activeDrawer = 'game-picker-title'; }
+  else if (activeDrawer === 'game-picker-title') activeDrawer = undefined;
+  el('workspace-content').inert = Boolean(activeDrawer);
+  if (state) render(state, { publish: false });
+}
+function closeDrawers() { const focus = activeDrawer; activeDrawer = undefined; el('variation-panel').open = false; el('learning-panel').open = false; el('drawer-error').hidden = true; setGamePicker(false); if (focus) el(focus).focus(); }
 
 function applyHostContext(context) {
   if (context?.theme) applyDocumentTheme(context.theme);
@@ -98,7 +115,67 @@ function timeControlLabel(value = '') {
 function retryHidden() { return Boolean(state?.retry && !state.retry.answerExposed); }
 function readyAnalysis() { return state?.analysis?.readiness === 'ready'; }
 function retryChecking() { const attempt = state?.retry?.attempts?.at(-1); return attempt?.ready === false && attempt.status === 'pending'; }
-function boardCanMove() { return canonicalSynced && !manualInFlight && !pendingPromotion && !retryChecking() && Boolean(state?.legalMoves?.length); }
+function boardCanMove() { return canonicalSynced && !manualInFlight && !pendingPromotion && !activeDrawer && !retryChecking() && Boolean(state?.legalMoves?.length); }
+function evidenceKey() { return `${state.sessionId}:${state.revision}:${state.fen}`; }
+function checkedGuide() {
+  if (!canonicalSynced || !engineEnabled || retryHidden()) return;
+  const canonical = state.analysis?.readiness === 'ready' ? state.analysis.currentPosition : undefined;
+  const evidence = canonical?.fen === state.fen ? canonical : positionEvidence?.key === evidenceKey() ? positionEvidence.evidence : undefined;
+  if (!evidence?.ready || !evidence.exact || evidence.bound || evidence.fen !== state.fen) return;
+  const pv = evidence.pv?.length ? evidence.pv : evidence.bestMove ? [evidence.bestMove] : [];
+  if (evidence.bestMove && pv.length && evidence.bestMove !== pv[0]) return;
+  try {
+    const chess = new Chess(state.fen);
+    const line = pv.map(uci => { if (!/^[a-h][1-8][a-h][1-8][qrbn]?$/.test(uci)) throw new Error('Invalid engine move'); const move = chess.move({ from: uci.slice(0, 2), to: uci.slice(2, 4), promotion: uci[4] }); return { uci, san: move.san, fen: chess.fen() }; });
+    const first = line[0];
+    if (first && !state.legalMoves?.some(move => `${move.from}${move.to}${move.promotion || ''}` === first.uci)) return;
+    return { evidence, line };
+  } catch { return; }
+}
+
+async function recordDisplayedGuide() {
+  if (!canonicalSynced || !engineEnabled || retryHidden() || !readyAnalysis() || state.variation?.length || state.sideToMove !== state.playerColor || !checkedGuide()?.line.length) return;
+  const key = evidenceKey();
+  if (guideExposures.has(key)) return;
+  guideExposures.add(key);
+  if (guideExposures.size > 200) guideExposures.delete(guideExposures.values().next().value);
+  const snapshot = { sessionId: state.sessionId, expectedRevision: state.revision };
+  try { unpack(await app.callServerTool({ name: 'get_position_evidence', arguments: snapshot }, { timeout: 10000 })); }
+  catch (error) { if (state?.sessionId === snapshot.sessionId && state.revision === snapshot.expectedRevision && !retryHidden() && engineEnabled) reportError(error); }
+}
+
+async function fetchVariationEvidence() {
+  if (!canonicalSynced || !connected || !engineEnabled || retryHidden() || !readyAnalysis() || !state.variation?.length || manualInFlight || pendingPromotion || checkedGuide()) return;
+  const key = evidenceKey();
+  if (evidencePending === key || evidenceAttempted === key) return;
+  const request = ++evidenceRequest;
+  const snapshot = { sessionId: state.sessionId, expectedRevision: state.revision, fen: state.fen };
+  evidencePending = key; evidenceAttempted = key; evidenceError = undefined;
+  render(state, { publish: false });
+  try {
+    const result = unpack(await app.callServerTool({ name: 'get_position_evidence', arguments: { sessionId: snapshot.sessionId, expectedRevision: snapshot.expectedRevision } }, { timeout: 45000 }));
+    if (request !== evidenceRequest || retryHidden() || state.sessionId !== snapshot.sessionId || state.revision !== snapshot.expectedRevision || state.fen !== snapshot.fen || result.sessionId !== snapshot.sessionId || result.revision !== snapshot.expectedRevision || result.fen !== snapshot.fen) return;
+    positionEvidence = { key, evidence: { ...result.evidence, fen: result.fen } };
+  } catch (error) { if (request === evidenceRequest && state && evidenceKey() === key && !retryHidden()) evidenceError = error.message || String(error); }
+  finally { if (request === evidenceRequest) { evidencePending = undefined; if (state) render(state, { publish: false }); } }
+}
+
+function renderEngineGuide() {
+  const hidden = retryHidden(), guide = checkedGuide();
+  el('engine-guide').hidden = hidden;
+  el('engine-toggle').setAttribute('aria-pressed', String(engineEnabled && !hidden));
+  el('engine-toggle').textContent = engineEnabled ? 'Engine on' : 'Engine off';
+  el('engine-play').hidden = !engineEnabled;
+  el('engine-play').disabled = !guide?.line.length || !boardCanMove() || Boolean(state.retry);
+  el('engine-play').textContent = state.variation?.length ? 'Play next' : 'Play best move';
+  el('engine-status').textContent = hidden || !engineEnabled || state.analysis?.readiness === 'analyzing' ? '' : evidencePending === evidenceKey() ? 'Checking this position…' : evidenceError && evidenceAttempted === evidenceKey() ? 'Engine guide unavailable. Try another position.' : guide ? guide.line.length ? `Best: ${guide.line[0].san}` : 'No legal continuation' : readyAnalysis() ? 'No checked engine line for this position' : 'Waiting for checked analysis';
+  el('engine-status').hidden = !el('engine-status').textContent;
+  el('engine-line').hidden = !engineEnabled || !guide?.line.length || hidden;
+  el('engine-line').replaceChildren(...(!hidden && engineEnabled && guide ? guide.line.slice(0, 8).map((move, index) => momentButton(move.san, () => void mutate('show_variation', { moves: [...(state.variation || []), ...guide.line.slice(0, index + 1).map(item => item.uci)] }), !boardCanMove() || Boolean(state.retry))) : []));
+  const branch = !hidden && !state.retry ? state.variation || [] : [];
+  el('variation-trail').hidden = !branch.length;
+  el('variation-trail').replaceChildren(...branch.map((move, index) => momentButton(move, () => void mutate('show_variation', { moves: branch.slice(0, index + 1) }), manualInFlight || !canonicalSynced || Boolean(pendingPromotion))));
+}
 function evalLabel(evidence) {
   if (!evidence?.ready || !evidence.exact || evidence.bound) return '';
   if (Number.isFinite(evidence.mate)) {
@@ -126,6 +203,9 @@ function renderGameIdentity() {
     el(`${role}-rating`).hidden = !Number.isFinite(person.rating);
     el(`${role}-piece`).dataset.color = color;
     el(`${role}-turn`).hidden = state.sideToMove !== color;
+    const score = !retryHidden() && readyAnalysis() ? state.analysis.accuracy?.[color === 'white' ? 'w' : 'b'] : undefined;
+    if (role === 'opponent') { el('opponent-accuracy').textContent = Number.isFinite(score) ? `Accuracy ${score.toFixed(1)}` : ''; el('opponent-accuracy').hidden = !Number.isFinite(score); }
+    else { const value = Number.isFinite(score) ? score : !retryHidden() && readyAnalysis() ? state.analysis.playerAccuracy : undefined; el('accuracy').textContent = Number.isFinite(value) ? value.toFixed(1) : ''; el('accuracy-assessment').hidden = !Number.isFinite(value); }
   }
   const timeClass = game.timeClass || selectedGame?.timeClass;
   const control = timeControlLabel(game.timeControl || selectedGame?.timeControl || '');
@@ -135,6 +215,7 @@ function renderGameIdentity() {
   el('game-meta').textContent = date;
   el('game-meta').hidden = !date;
   el('game-source').textContent = fixture ? state.sourceLabel || selectedGame.sourceLabel || 'Verification fixture' : '';
+  el('game-source').title = el('game-source').textContent;
   el('game-source').hidden = !fixture;
 }
 
@@ -144,11 +225,9 @@ function renderReviewControls() {
   const ready = readyAnalysis(), selected = analysis.selectedMove;
   const busy = manualInFlight || !canonicalSynced || Boolean(pendingPromotion);
   el('assessment').hidden = hidden || !ready;
-  el('accuracy').textContent = hidden ? '' : ready && Number.isFinite(analysis.playerAccuracy) ? analysis.playerAccuracy.toFixed(1) : '';
-  el('accuracy-assessment').hidden = !el('accuracy').textContent;
-  const evidence = analysis.currentPosition;
-  el('evaluation').textContent = hidden || !ready || (state.variation?.length && evidence?.fen !== state.fen) ? '' : evalLabel(evidence);
-  const grade = !hidden && ready ? retry?.answerExposed ? retry.originalClassification?.label || '' : selected?.classification?.label || '' : '';
+  const evidence = checkedGuide()?.evidence;
+  el('evaluation').textContent = hidden ? '' : evalLabel(evidence);
+  const grade = !hidden && ready ? retry?.answerExposed ? retry.originalClassification?.label || '' : state.variation?.length ? '' : selected?.classification?.label || '' : '';
   el('classification').textContent = grade ? `${retry ? 'Original: ' : selected?.san ? `${selected.san} · ` : ''}${grade}` : '';
   el('classification').dataset.grade = grade || '';
   el('move-assessment').hidden = !grade;
@@ -158,17 +237,20 @@ function renderReviewControls() {
   el('analyze').hidden = ready || Boolean(retry) || busyAnalysis;
   el('analyze').textContent = ['failed', 'interrupted'].includes(analysis.readiness) ? 'Resume analysis' : 'Analyze game';
   const total = analysis.totalPositions, completed = analysis.completedPositions || 0;
-  el('analysis-status').textContent = hidden || retry ? '' : analysis.error || (busyAnalysis ? `Analyzing game${Number.isInteger(total) && total > 0 ? ` · ${completed} of ${total} positions` : '…'}` : '');
+  const grading = analysis.phase === 'moves' && Number.isInteger(analysis.currentMove) && Number.isInteger(analysis.totalMoves) && analysis.totalMoves > 0;
+  el('analysis-status').textContent = hidden || retry ? '' : analysis.error || (busyAnalysis ? grading ? `Checking move ${Math.ceil(analysis.currentMove / 2)} of ${Math.ceil(analysis.totalMoves / 2)} · ${analysis.currentMove % 2 ? 'White' : 'Black'}` : `Analyzing game${Number.isInteger(total) && total > 0 ? ` · ${completed} of ${total} positions` : '…'}` : '');
   el('analysis-progress').hidden = !el('analysis-status').textContent;
-  el('analysis-meter').hidden = !busyAnalysis || !Number.isInteger(total) || total <= 0 || Boolean(retry);
-  if (Number.isInteger(total) && total > 0) { el('analysis-meter').max = total; el('analysis-meter').value = Math.min(completed, total); }
+  el('analysis-meter').hidden = !busyAnalysis || (!grading && (!Number.isInteger(total) || total <= 0)) || Boolean(retry);
+  if (grading) { el('analysis-meter').max = analysis.totalMoves; el('analysis-meter').value = Math.min(analysis.currentMove, analysis.totalMoves); }
+  else if (Number.isInteger(total) && total > 0) { el('analysis-meter').max = total; el('analysis-meter').value = Math.min(completed, total); }
   const mover = selected?.color || selected?.before?.sideToMove || selected?.best?.sideToMove;
   const player = state.playerColor === 'black' ? 'b' : 'w';
   el('start-retry').disabled = busy || Boolean(retry) || !ready || !selected || mover !== player;
   el('start-retry').hidden = Boolean(retry) || !ready || !selected || mover !== player;
   el('review-actions').hidden = el('analyze').hidden && el('start-retry').hidden && el('analysis-progress').hidden;
   el('variation-form').hidden = Boolean(retry);
-  el('variation-panel').hidden = Boolean(retry);
+  el('variation-panel').hidden = false;
+  el('retry-form').hidden = !retry;
   el('return').hidden = !state.variation?.length || Boolean(retry);
   el('previous').disabled ||= hidden || busy;
   el('next').disabled ||= hidden || busy;
@@ -189,6 +271,7 @@ function renderReviewControls() {
   }));
   renderRetry(retry);
   renderLearning(hidden);
+  renderEngineGuide();
 }
 
 function renderRetry(retry) {
@@ -216,7 +299,7 @@ function renderLearning(hidden) {
   const learning = state.learning || {};
   const saved = hidden || state.retry ? [] : learning.savedMistakes || [];
   el('learning-panel').hidden = hidden || Boolean(state.retry);
-  el('learning-title').textContent = 'Saved mistakes & progress';
+  el('learning-title').textContent = 'History';
   el('saved-mistakes').replaceChildren(...saved.slice(0, 5).map(item => {
     const game = catalog.games.find(game => game.id === item.gameId);
     const opponent = game && (game.playerColor === 'black' ? game.white?.username : game.black?.username);
@@ -231,7 +314,7 @@ function renderCatalog(next) {
   if (!Array.isArray(next?.games)) throw new Error('The game catalog is unavailable.');
   const oldUsername = catalog.username;
   catalog = next;
-  if (!catalogInitialized) { setGamePicker(!catalog.username && !state?.retry); catalogInitialized = true; }
+  if (!catalogInitialized) { setGamePicker(!catalog.username && !state?.retry && !catalog.games.length); catalogInitialized = true; }
   if (!el('username').value || el('username').value === oldUsername) el('username').value = catalog.username || '';
   const options = catalog.games.map(game => {
     const option = document.createElement('option'); option.value = game.id;
@@ -248,9 +331,10 @@ function renderCatalog(next) {
   if (state) { renderGameIdentity(); renderReviewControls(); }
 }
 
-async function loadCatalog({ refresh = false, username = el('username').value.trim() } = {}) {
+async function loadCatalog({ refresh = false, username = el('username').value.trim(), selectImported = false } = {}) {
   if (!connected || catalogInFlight || (refresh && !username)) return;
   catalogInFlight = true;
+  const importSelection = selectImported && state ? { sessionId: state.sessionId, gameId: state.gameId, sample: catalog.games.find(game => game.id === state.gameId)?.fixture || /verification fixture/i.test(state.sourceLabel || '') } : undefined;
   const request = ++catalogRequest;
   el('refresh-games').disabled = true; el('username').disabled = true;
   el('game').disabled = !catalog.games.length || manualInFlight || Boolean(state?.retry);
@@ -261,6 +345,10 @@ async function loadCatalog({ refresh = false, username = el('username').value.tr
     if (request === catalogRequest && !disposed) {
       renderCatalog(result);
       if (result.import?.status === 'error') { setGamePicker(true); reportError(new Error(result.import.error?.message || 'Refresh failed. Saved games remain available.')); }
+      else if (importSelection?.sample && state?.sessionId === importSelection.sessionId && state.gameId === importSelection.gameId && !state.retry) {
+        const game = result.games.filter(game => !game.fixture).sort((a, b) => (b.endTime || 0) - (a.endTime || 0))[0];
+        if (game && await mutate('select_game', { gameId: game.id })) { setGamePicker(false); el('game-picker-title').focus(); }
+      }
     }
   } catch (error) { reportError(error); }
   finally {
@@ -327,20 +415,25 @@ function render(next, { publish = true } = {}) {
   if (!next?.sessionId || !Number.isInteger(next.revision)) throw new Error('The review has no valid session or revision.');
   if (state && next.sessionId !== state.sessionId) throw new Error('This view received a different review session.');
   if (state && next.revision < state.revision) return false;
+  const boardPosition = value => JSON.stringify({ gameId: value.gameId, selectedPly: value.selectedPly, fen: value.fen, variation: value.variation || [], retryId: value.retry?.retryId });
+  if (state && boardPosition(state) !== boardPosition(next)) ground?.cancelMove?.();
   if (pendingPromotion && (next.sessionId !== pendingPromotion.sessionId || next.revision !== pendingPromotion.revision)) pendingPromotion = undefined;
   state = next;
+  if (retryHidden()) { positionEvidence = undefined; evidencePending = undefined; evidenceAttempted = undefined; evidenceError = undefined; evidenceRequest++; }
   const cells = fenBoard(state.fen);
   const turnColor = state.sideToMove === 'black' || state.sideToMove === 'b' ? 'black' : 'white';
   const interactive = boardCanMove();
   const dests = new Map();
   if (interactive) for (const move of state.legalMoves) { const destinations = dests.get(move.from) || []; if (!destinations.includes(move.to)) destinations.push(move.to); dests.set(move.from, destinations); }
   const snapshot = { sessionId: state.sessionId, revision: state.revision };
+  const best = checkedGuide()?.line[0]?.uci;
+  const autoShapes = best ? [{ orig: best.slice(0, 2), dest: best.slice(2, 4), brush: 'green' }] : [];
   const boardConfig = {
     fen: state.fen, orientation: state.playerColor === 'black' ? 'black' : 'white', turnColor,
     // viewOnly cannot be changed through Chessground.set. Bind once, and gate
     // movement with canonical legal destinations and movable color instead.
     viewOnly: false, coordinates: true, coordinatesOnSquares: false, ranksPosition: 'left',
-    animation: { enabled: false }, drawable: { enabled: false, visible: false },
+    animation: { enabled: false }, drawable: { enabled: false, visible: true, autoShapes },
     movable: { free: false, color: interactive ? turnColor : undefined, dests, showDests: true, rookCastle: false, events: { after: (from, to) => onBoardMove(from, to, snapshot) } },
     premovable: { enabled: false }, draggable: { enabled: interactive }, lastMove: undefined,
   };
@@ -348,11 +441,12 @@ function render(next, { publish = true } = {}) {
   else ground = Chessground(el('board'), boardConfig);
   const placement = cells.flatMap((piece, index) => piece ? [`${piece === piece.toUpperCase() ? 'White' : 'Black'} ${pieceNames[piece.toLowerCase()]} ${String.fromCharCode(97 + index % 8)}${8 - Math.floor(index / 8)}`] : []);
   el('accessible-position').textContent = `${turnColor === 'black' ? 'Black' : 'White'} to move. ${placement.join(', ')}.`;
-  el('board').setAttribute('aria-label', `${turnColor === 'black' ? 'Black' : 'White'} to move, played ply ${state.selectedPly}${state.variation?.length ? ', variation' : ''}. Move a piece to ${state.retry ? 'retry this decision' : 'explore a variation'}. Use Piece locations for the accessible position or ${state.retry ? 'Your move' : 'Explore a variation'} for keyboard move entry.`);
+  el('board').setAttribute('aria-label', `${turnColor === 'black' ? 'Black' : 'White'} to move, played ply ${state.selectedPly}${state.variation?.length ? ', variation' : ''}. Move a piece to ${state.retry ? 'retry this decision' : 'explore a variation'}. Use Keyboard moves to enter a move or read piece locations.`);
   el('side').textContent = `${turnColor === 'black' ? 'Black' : 'White'} to move`;
+  el('board-instruction').textContent = state.retry ? 'Move a piece to try again' : 'Move a piece to explore';
   el('position').textContent = state.retry ? `Retry move ${Math.ceil(state.retry.ply / 2)}` : state.variation?.length ? state.variation.join(' ') : state.selectedPly ? moveLabel(state.selectedPly, state.playedMoves?.[state.selectedPly - 1] || '') : 'Start position';
   el('position').title = state.variation?.length ? `Variation from played ply ${state.selectedPly}: ${state.variation.join(' ')}` : '';
-  el('previous').disabled = state.selectedPly === 0 || manualInFlight;
+  el('previous').disabled = !state.variation?.length && state.selectedPly === 0 || manualInFlight;
   const totalPlies = state.totalPlies ?? state.playedMoves?.length;
   el('next').disabled = manualInFlight || (Number.isInteger(totalPlies) && state.selectedPly >= totalPlies);
   el('return').disabled = manualInFlight;
@@ -364,6 +458,8 @@ function render(next, { publish = true } = {}) {
   displayedRevision = state.revision;
   redrawStatus();
   if (publish) queueContext(state);
+  void fetchVariationEvidence();
+  void recordDisplayedGuide();
   return true;
 }
 
@@ -441,28 +537,50 @@ function scheduleSync() {
 
 async function mutate(name, args = {}) {
   if (!state || !canonicalSynced || manualInFlight || pendingPromotion) return;
+  const fingerprint = value => JSON.stringify({ sessionId: value.sessionId, gameId: value.gameId, selectedPly: value.selectedPly, fen: value.fen, variation: value.variation || [], retryId: value.retry?.retryId, attemptRevision: value.retry?.attemptRevision });
+  const intentPosition = fingerprint(state), intentRevision = state.revision;
+  const intentDrawer = activeDrawer;
   manualInFlight = true;
   clearError();
   render(state, { publish: false });
   let committed;
   try {
     const sessionId = state.sessionId;
-    const result = unpack(await app.callServerTool({ name, arguments: { sessionId, expectedRevision: state.revision, ...args } }, { timeout: name === 'submit_retry' ? 45000 : 10000 }));
-    if (state.sessionId === sessionId) { render(result.state || result); committed = state; }
+    const issue = async () => unpack(await app.callServerTool({ name, arguments: { sessionId, expectedRevision: state.revision, ...args } }, { timeout: name === 'submit_retry' ? 45000 : 10000 }));
+    let result;
+    try { result = await issue(); }
+    catch (error) {
+      if (name === 'submit_retry' || !/^Stale revision\b/i.test(error.message || '')) throw error;
+      const refreshed = unpack(await app.callServerTool({ name: 'get_review_context', arguments: { sessionId } }, { timeout: 10000 }));
+      render(refreshed.state || refreshed);
+      if (state.revision <= intentRevision || fingerprint(state) !== intentPosition) throw new Error('The position changed. Choose your move again.');
+      clearError();
+      result = await issue();
+    }
+    if (state.sessionId === sessionId) { render(result.state || result); committed = state; if (intentDrawer && intentDrawer !== 'game-picker-title' && activeDrawer === intentDrawer) { closeDrawers(); el('position').focus(); } }
   } catch (error) { reportError(error); await sync(); }
   finally { manualInFlight = false; if (state) render(state, { publish: false }); }
   return committed;
 }
 
-el('previous').addEventListener('click', () => { if (state) void mutate('go_to_move', { ply: Math.max(0, state.selectedPly - 1) }); });
+el('previous').addEventListener('click', () => { if (state) void (state.variation?.length ? state.variation.length === 1 ? mutate('return_to_game') : mutate('show_variation', { moves: state.variation.slice(0, -1) }) : mutate('go_to_move', { ply: Math.max(0, state.selectedPly - 1) })); });
 el('next').addEventListener('click', () => { if (state) void mutate('go_to_move', { ply: state.selectedPly + 1 }); });
 el('return').addEventListener('click', () => void mutate('return_to_game'));
-el('import-form').addEventListener('submit', event => { event.preventDefault(); void loadCatalog({ refresh: true }); });
+el('import-form').addEventListener('submit', event => { event.preventDefault(); void loadCatalog({ refresh: true, selectImported: true }); });
 el('game-picker-title').addEventListener('click', () => setGamePicker(el('game-picker').hidden));
+for (const [id, focus] of [['variation-panel', 'keyboard-toggle'], ['learning-panel', 'learning-title']]) {
+  el(id).addEventListener('toggle', () => {
+    if (el(id).open) { setGamePicker(false); el(id === 'variation-panel' ? 'learning-panel' : 'variation-panel').open = false; activeDrawer = focus; }
+    else if (activeDrawer === focus) activeDrawer = undefined;
+    el('workspace-content').inert = Boolean(activeDrawer);
+    if (state) render(state, { publish: false });
+  });
+}
 el('game').addEventListener('change', () => { if (state && el('game').value && el('game').value !== state.gameId) void mutate('select_game', { gameId: el('game').value }).then(committed => { if (committed) { setGamePicker(false); el('game-picker-title').focus(); } }); });
-el('game').addEventListener('focus', () => { if (catalog.username && !state?.retry) void loadCatalog({ refresh: true, username: catalog.username }); });
+el('engine-toggle').addEventListener('click', () => { engineEnabled = !engineEnabled; if (state) render(state, { publish: false }); });
+el('engine-play').addEventListener('click', () => { const move = checkedGuide()?.line[0]?.uci; if (move && !state.retry) void mutate('show_variation', { moves: [...(state.variation || []), move] }); });
 el('analyze').addEventListener('click', () => void mutate('analyze_game'));
-el('start-retry').addEventListener('click', () => { if (state?.analysis?.selectedMove) { el('retry-move').value = ''; void mutate('start_retry', { ply: state.analysis.selectedMove.ply, answerPreviouslyShown: true }).then(committed => { if (committed?.retry) el('retry-move').focus(); }); } });
+el('start-retry').addEventListener('click', () => { if (state?.analysis?.selectedMove) { el('retry-move').value = ''; void mutate('start_retry', { ply: state.analysis.selectedMove.ply, answerPreviouslyShown: true }).then(committed => { if (committed?.retry) el('position').focus(); }); } });
 el('retry-form').addEventListener('submit', event => {
   event.preventDefault();
   const retry = state?.retry, move = el('retry-move').value.trim();
@@ -475,10 +593,11 @@ el('cancel-promotion').addEventListener('click', cancelPromotion);
 el('variation-form').addEventListener('submit', event => {
   event.preventDefault();
   const moves = el('variation').value.trim().split(/\s+/).filter(Boolean);
-  if (moves.length) void mutate('show_variation', { moves });
+  if (moves.length) void mutate('show_variation', { moves: [...(state?.variation || []), ...moves] });
 });
 document.addEventListener('keydown', event => {
   if (event.key === 'Escape' && pendingPromotion) { event.preventDefault(); cancelPromotion(); return; }
+  if (event.key === 'Escape' && activeDrawer) { event.preventDefault(); closeDrawers(); return; }
   if (/^(INPUT|TEXTAREA|SELECT)$/.test(event.target?.tagName)) return;
   if (event.key === 'ArrowLeft') { event.preventDefault(); el('previous').click(); }
   if (event.key === 'ArrowRight') { event.preventDefault(); el('next').click(); }

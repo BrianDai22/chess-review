@@ -66,6 +66,7 @@ export class Analysis {
     return { gameId, analysisKey: input.analysisKey, profile, readiness: current?.readiness || 'pending',
       completedPositions: current?.completedPositions || 0, totalPositions: input.totalPositions,
       error: current?.error || null, recoverable: current?.recoverable || false,
+      phase: current?.phase || null, currentMove: current?.currentMove || null, totalMoves: input.history.length,
       accuracy: current?.readiness === 'ready' ? current.accuracy : null,
       playerAccuracy: current?.readiness === 'ready' ? current.playerAccuracy : null,
       updatedAt: current?.updatedAt || null, completedAt: current?.completedAt || null };
@@ -144,7 +145,8 @@ export class Analysis {
       let work = this.store.get('analysis-work', input.analysisKey);
       if (!work || work.pgnHash !== input.pgnHash) work = { gameId: input.game.id, analysisKey: input.analysisKey, pgnHash: input.pgnHash, cache: {} };
       const progress = () => Array.from({ length: input.totalPositions }, (_, ply) => work.cache[cacheKey(input.initialFen, input.moves.slice(0, ply), 'refinement')]).filter(exact).length;
-      this.publish(input, { readiness: 'analyzing', completedPositions: progress(), totalPositions: input.totalPositions, error: null }, assertOwnership);
+      this.publish(input, { readiness: 'analyzing', phase:'positions', currentMove:null, totalMoves:input.history.length,
+        completedPositions: progress(), totalPositions: input.totalPositions, error: null }, assertOwnership);
       const cachedEngine = { analyze: async request => {
         assertOwnership();
         const { initialFen = DEFAULT_POSITION, moves = [], profile: budget = 'ordinary', searchMoves = [] } = request;
@@ -156,20 +158,33 @@ export class Analysis {
           work.cache[key] = evidence; work.updatedAt = this.store.now();
           this.store.set('analysis-work', input.analysisKey, work);
           const current = this.store.get('analyses', input.game.id), count = progress();
-          if (current.completedPositions !== count) this.publish(input, { readiness: 'analyzing', completedPositions: count, totalPositions: input.totalPositions, error: null }, assertOwnership);
+          if (current.completedPositions !== count) this.publish(input, { readiness: 'analyzing', phase:current.phase || 'positions',
+            currentMove:current.currentMove || null,totalMoves:input.history.length,completedPositions: count, totalPositions: input.totalPositions, error: null }, assertOwnership);
         });
         return evidence;
       } };
       const ordinaryPositions = [], positions = [];
-      for (let ply = 0; ply < input.totalPositions; ply++) {
-        const moves = input.moves.slice(0, ply);
-        ordinaryPositions.push(await cachedEngine.analyze({ initialFen: input.initialFen, moves, profile: 'ordinary' }));
-        const refinement = await cachedEngine.analyze({ initialFen: input.initialFen, moves, profile: 'refinement' });
-        positions.push(refinement);
-        if (!exact(refinement) || refinement.profileId !== ENGINE_PROFILE.id) throw new Error(`Position at ply ${ply} lacks exact canonical refinement evidence`);
-      }
+      let nextPly=0, positionFailure=null;
+      // Two independent fresh-process positions share one game lease. Wait for both
+      // workers to settle before publishing failure or releasing that lease.
+      await Promise.allSettled(Array.from({length:2},async()=>{
+        while (!positionFailure) {
+          const ply=nextPly++; if(ply>=input.totalPositions)return;
+          try {
+            const moves=input.moves.slice(0,ply);
+            ordinaryPositions[ply]=await cachedEngine.analyze({initialFen:input.initialFen,moves,profile:'ordinary'});
+            if(positionFailure)return;
+            const refinement=await cachedEngine.analyze({initialFen:input.initialFen,moves,profile:'refinement'});
+            positions[ply]=refinement;
+            if(!exact(refinement)||refinement.profileId!==ENGINE_PROFILE.id)throw new Error(`Position at ply ${ply} lacks exact canonical refinement evidence`);
+          } catch(error) { positionFailure ||= error; throw error; }
+        }
+      }));
+      if(positionFailure)throw positionFailure;
       const assessedMoves = [];
       for (let i = 0; i < input.history.length; i++) {
+        this.publish(input,{readiness:'analyzing',phase:'moves',currentMove:i+1,totalMoves:input.history.length,
+          completedPositions:progress(),totalPositions:input.totalPositions,error:null},assertOwnership);
         const played = input.history[i], before = positions[i], after = positions[i + 1], ordinaryBefore = ordinaryPositions[i], ordinaryAfter = ordinaryPositions[i + 1];
         const beforeW = winPercent(ordinaryBefore, played.color);
         const afterW = winPercent(ordinaryAfter, played.color);
@@ -189,6 +204,7 @@ export class Analysis {
       if (!accuracy || Object.values(accuracy).some(value => value !== null && !Number.isFinite(value))) throw new Error('Canonical game accuracy is incomplete');
       const color = input.game.playerColor === 'black' || input.game.playerColor === 'b' ? 'b' : 'w';
       return this.publish(input, { readiness: 'ready', completedPositions: input.totalPositions, totalPositions: input.totalPositions,
+        phase:'complete',currentMove:null,totalMoves:input.history.length,
         accuracy, playerAccuracy: accuracy[color], playerColor: color, positions, ordinaryPositions, moves: assessedMoves,
         keyMoments: assessedMoves.filter(move => move.color === color && ['Inaccuracy','Mistake','Blunder','Miss','Great','Brilliant'].includes(move.classification.label)).map(move => move.ply),
         completedAt: this.store.now(), error: null, recoverable: false }, assertOwnership);
@@ -201,9 +217,10 @@ export class Analysis {
           completedPositions: this.status(input.game.id).completedPositions, totalPositions: input.totalPositions,
           error: error.message, recoverable: true });
       });
-      const work = this.store.get('analysis-work', input.analysisKey), completedPositions = this.status(input.game.id).completedPositions;
+      const work = this.store.get('analysis-work', input.analysisKey), currentStatus=this.status(input.game.id), completedPositions = currentStatus.completedPositions;
       if (work) this.store.set('analysis-work', input.analysisKey, { ...work, error: error.message, updatedAt: this.store.now() });
       return this.publish(input, { readiness: controller.signal.aborted ? 'interrupted' : 'failed', completedPositions,
+        phase:currentStatus.phase,currentMove:currentStatus.currentMove,totalMoves:input.history.length,
         totalPositions: input.totalPositions, error: error.message, recoverable: true }, () => {
         if (!this.store.renewLease(this.leaseKey, token, this.leaseMs)) throw new Error('Analysis owner changed before error publication');
       });

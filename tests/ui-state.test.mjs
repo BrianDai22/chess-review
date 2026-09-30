@@ -2,6 +2,7 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 import { readFile } from 'node:fs/promises';
 import { runInNewContext } from 'node:vm';
+import { Chess } from 'chess.js';
 
 const source = (await readFile(new URL('../src/ui.mjs', import.meta.url), 'utf8')).replace(/^import .*;\n/gm, '');
 const initial = { sessionId: 'review-one', gameId: 'fixture', revision: 1, selectedPly: 0,
@@ -29,7 +30,7 @@ function harness({ delayedContext = false, delayedSync = false, delayedSyncCall 
   const contextCalls = [], toolCalls = [], timerCallbacks = [], boardConfigurations = [];
   const contextWait = deferred(), syncWait = deferred(), launchWait = deferred();
   let now = 0;
-  let canonical = { ...initialState }, appInstance;
+  let canonical = { ...initialState }, appInstance, boardInstance;
   class App {
     constructor() { appInstance = this; }
     addEventListener() {}
@@ -39,10 +40,12 @@ function harness({ delayedContext = false, delayedSync = false, delayedSyncCall 
       toolCalls.push(call);
       if (toolResponses[call.name]) {
         const response = await toolResponses[call.name](call, canonical);
-        if (response.sessionId) canonical = response;
+        if (response.sessionId && response.playedMoves) canonical = response;
         return { structuredContent: response };
       }
       if (call.name === 'list_games' || call.name === 'refresh_games') return { structuredContent: catalogResult || { username: null, games: [{ id: canonical.gameId, fixture: true, sourceLabel: 'Verification fixture' }] } };
+      if (call.name === 'get_position_evidence') return { structuredContent: { sessionId: canonical.sessionId, revision: canonical.revision, fen: canonical.fen, evidence: { ready: false, exact: false } } };
+      if (call.name === 'get_review_context') return { structuredContent: canonical };
       if (call.name === 'sync_review_view') {
         if (delayedSync && toolCalls.filter(c => c.name === 'sync_review_view').length === delayedSyncCall) return syncWait.promise;
         return { structuredContent: { state: canonical, changed: call.arguments.knownRevision !== canonical.revision } };
@@ -64,15 +67,21 @@ function harness({ delayedContext = false, delayedSync = false, delayedSyncCall 
   function Chessground(element, config) {
     assert.equal(element, nodes.get('board'));
     boardConfigurations.push(config);
-    return { set(next) { boardConfigurations.push(next); }, destroy() {} };
+    boardInstance = { config, dragOrigin: undefined, cancellations: 0,
+      set(next) { this.config = next; boardConfigurations.push(next); },
+      cancelMove() { this.cancellations++; this.dragOrigin = undefined; },
+      beginDrag(from) { this.dragOrigin = from; },
+      drop(to) { const from = this.dragOrigin; this.dragOrigin = undefined; if (from) this.config.movable.events.after(from, to); },
+      destroy() {} };
+    return boardInstance;
   }
-  runInNewContext(source, { App, OpenAIExtensions, Chessground, document, window: { addEventListener() {} },
+  runInNewContext(source, { App, OpenAIExtensions, Chessground, Chess, document, window: { addEventListener() {} },
     crypto: { randomUUID: () => 'mount-one' },
     Date: { now: () => now },
     applyDocumentTheme() {}, applyHostStyleVariables() {},
     setTimeout(fn) { timerCallbacks.push(fn); return timerCallbacks.length; }, clearTimeout() {}, console });
-  return { nodes, getNode: id => document.getElementById(id), contextCalls, toolCalls, timerCallbacks, boardConfigurations, contextWait, syncWait, launchWait, setNow(value) { now = value; },
-    get canonical() { return canonical; }, get app() { return appInstance; } };
+  return { nodes, document, getNode: id => document.getElementById(id), contextCalls, toolCalls, timerCallbacks, boardConfigurations, contextWait, syncWait, launchWait, setNow(value) { now = value; },
+    get canonical() { return canonical; }, get app() { return appInstance; }, get board() { return boardInstance; } };
 }
 
 test('manual navigation commits explicitly then publishes the returned canonical revision', async () => {
@@ -299,15 +308,17 @@ test('game switching uses the canonical session guard and publishes the selected
   assert.equal(h.nodes.get('game-picker-title').focusCount, 1);
 });
 
-test('game picker opens for an unset username and remains collapsed for a remembered account', async () => {
+test('game picker keeps playable sample visible and opens import only for an empty catalog', async () => {
   const unset = harness(); await settle();
-  assert.equal(unset.nodes.get('game-picker').hidden, false);
-  assert.equal(unset.nodes.get('game-picker-title').attributes['aria-expanded'], 'true');
+  assert.equal(unset.nodes.get('game-picker').hidden, true);
+  assert.equal(unset.nodes.get('game-picker-title').attributes['aria-expanded'], 'false');
   assert.equal(unset.nodes.get('username').value, '');
   const remembered = harness({ catalogResult: { username: 'SuppliedPublicAccount', games: [{ id: initial.gameId, fixture: true }] } }); await settle();
   assert.equal(remembered.nodes.get('game-picker').hidden, true);
   assert.equal(remembered.nodes.get('game-picker-title').attributes['aria-expanded'], 'false');
   assert.equal(remembered.nodes.get('username').value, 'SuppliedPublicAccount');
+  const empty = harness({ catalogResult: { username: null, games: [] } }); await settle();
+  assert.equal(empty.nodes.get('game-picker').hidden, false);
 });
 
 test('player bars follow canonical board orientation, actual ratings and side to move', async () => {
@@ -377,7 +388,7 @@ test('retrying a move already displayed on the board records prior answer exposu
   h.nodes.get('start-retry').click(); await settle();
   assert.equal(h.nodes.get('retry-panel').hidden, false);
   assert.equal(h.nodes.get('assessment').hidden, true);
-  assert.equal(h.nodes.get('retry-move').focusCount, 1);
+  assert.equal(h.nodes.get('position').focusCount, 1);
   assert.match(h.nodes.get('retry-history').textContent, /answer was viewed before this retry/);
 });
 
@@ -532,4 +543,202 @@ test('resuming a retry keeps the unset-account picker collapsed and its button t
   h.nodes.get('game-picker-title').click();
   assert.equal(h.nodes.get('game-picker').hidden, true);
   assert.equal(h.nodes.get('game-picker-title').attributes['aria-expanded'], 'false');
+});
+
+const guided = { ...ready, analysis: { ...ready.analysis, accuracy: { w: 93.456, b: 87.65 },
+  currentPosition: { ready: true, exact: true, fen: initial.fen, cp: 35, bestMove: 'g1f3', pv: ['g1f3', 'e7e5'] } } };
+
+test('checked legal engine guide draws a best move arrow and both players show canonical accuracy', async () => {
+  const h = harness({ initialState: guided }); await settle();
+  assert.equal(h.nodes.get('accuracy').textContent, '93.5');
+  assert.equal(h.nodes.get('opponent-accuracy').textContent, 'Accuracy 87.7');
+  assert.equal(h.nodes.get('engine-play').disabled, false);
+  assert.equal(h.nodes.get('engine-status').textContent, 'Best: Nf3');
+  assert.equal(h.boardConfigurations.at(-1).drawable.autoShapes[0].orig, 'g1');
+  assert.equal(h.boardConfigurations.at(-1).drawable.autoShapes[0].dest, 'f3');
+  assert.equal(h.nodes.get('engine-line').children[0].textContent, 'Nf3');
+  h.nodes.get('engine-toggle').click();
+  assert.equal(h.nodes.get('engine-play').hidden, true);
+  assert.equal(h.nodes.get('engine-line').children.length, 0);
+  assert.equal(h.boardConfigurations.at(-1).drawable.autoShapes.length, 0);
+  const black = harness({ initialState: { ...guided, playerColor: 'black' } }); await settle();
+  assert.equal(black.nodes.get('accuracy').textContent, '87.7');
+  assert.equal(black.nodes.get('opponent-accuracy').textContent, 'Accuracy 93.5');
+});
+
+test('illegal or wrong-FEN engine evidence never draws an arrow or enables play', async () => {
+  for (const evidence of [{ ...guided.analysis.currentPosition, fen: afterE4 }, { ...guided.analysis.currentPosition, bestMove: 'e2e5', pv: ['e2e5'] }, { ...guided.analysis.currentPosition, exact: false }]) {
+    const h = harness({ initialState: { ...guided, analysis: { ...guided.analysis, currentPosition: evidence } } }); await settle();
+    assert.equal(h.boardConfigurations.at(-1).drawable.autoShapes.length, 0);
+    assert.equal(h.nodes.get('engine-play').disabled, true);
+  }
+});
+
+test('hidden retry suppresses scores, engine arrows, continuation and evidence requests', async () => {
+  const h = harness({ initialState: { ...guided, retry: hiddenRetry } }); await settle();
+  assert.equal(h.nodes.get('opponent-accuracy').hidden, true);
+  assert.equal(h.nodes.get('accuracy').textContent, '');
+  assert.equal(h.nodes.get('engine-guide').hidden, true);
+  assert.equal(h.nodes.get('engine-line').children.length, 0);
+  assert.equal(h.boardConfigurations.at(-1).drawable.autoShapes.length, 0);
+  assert.equal(h.toolCalls.filter(call => call.name === 'get_position_evidence').length, 0);
+  assert.equal(h.nodes.get('board-instruction').textContent, 'Move a piece to try again');
+});
+
+test('variation guide fetches explicit checked evidence and plays the next move through canonical guards', async () => {
+  const chess = new Chess(afterE4); chess.move('e5');
+  const h = harness({ initialState: { ...guided, fen: afterE4, sideToMove: 'black', variation: ['e4'], legalMoves: [{ from: 'e7', to: 'e5' }], analysis: { ...guided.analysis, currentPosition: null } }, toolResponses: {
+    get_position_evidence: (call, canonical) => { assert.equal(call.arguments.sessionId, initial.sessionId); assert.equal(call.arguments.expectedRevision, canonical.revision); return { sessionId: canonical.sessionId, revision: canonical.revision, fen: canonical.fen, evidence: { ready: true, exact: true, cp: 15, bestMove: canonical.revision === 1 ? 'e7e5' : 'g1f3', pv: canonical.revision === 1 ? ['e7e5', 'g1f3'] : ['g1f3'] } }; },
+    show_variation: (call, canonical) => { assert.deepEqual(Array.from(call.arguments.moves), ['e4', 'e7e5']); return { ...canonical, revision: 2, fen: chess.fen(), sideToMove: 'white', variation: ['e4', 'e5'], legalMoves: [{ from: 'g1', to: 'f3' }] }; },
+  } }); await settle();
+  assert.equal(h.nodes.get('engine-status').textContent, 'Best: e5');
+  assert.equal(h.nodes.get('classification').textContent, '');
+  assert.equal(h.nodes.get('engine-play').textContent, 'Play next');
+  h.nodes.get('engine-play').click(); await settle();
+  assert.equal(h.boardConfigurations.at(-1).fen, chess.fen());
+  assert.equal(h.contextCalls.at(-1).structuredContent.revision, 2);
+  assert.equal(h.nodes.get('engine-status').textContent, 'Best: Nf3');
+});
+
+test('late variation evidence cannot expose an answer after entering a hidden retry', async () => {
+  const evidence = deferred();
+  const h = harness({ initialState: { ...guided, variation: ['e4'], analysis: { ...guided.analysis, currentPosition: null } }, toolResponses: {
+    get_position_evidence: () => evidence.promise,
+    start_retry: (call, canonical) => ({ ...canonical, revision: 2, variation: [], retry: hiddenRetry }),
+  } }); await settle();
+  h.nodes.get('start-retry').click(); await settle();
+  evidence.resolve({ sessionId: initial.sessionId, revision: 1, fen: initial.fen, evidence: guided.analysis.currentPosition }); await settle();
+  assert.equal(h.nodes.get('engine-guide').hidden, true);
+  assert.equal(h.boardConfigurations.at(-1).drawable.autoShapes.length, 0);
+  assert.equal(h.nodes.get('engine-line').children.length, 0);
+  assert.equal(h.contextCalls.at(-1).structuredContent.revision, 2);
+});
+
+test('analysis-in-progress variation does not launch competing engine searches', async () => {
+  const h = harness({ initialState: { ...initial, variation: ['e4'], analysis: { readiness: 'analyzing', phase: 'moves', currentMove: 8, totalMoves: 20, completedPositions: 21, totalPositions: 21 } } }); await settle();
+  assert.equal(h.toolCalls.filter(call => call.name === 'get_position_evidence').length, 0);
+  assert.equal(h.nodes.get('analysis-status').textContent, 'Checking move 4 of 10 · Black');
+  assert.equal(h.nodes.get('analysis-meter').value, 8);
+  assert.equal(h.nodes.get('analysis-meter').max, 20);
+  assert.equal(h.nodes.get('engine-status').textContent, '');
+  assert.equal(h.boardConfigurations.at(-1).draggable.enabled, true);
+});
+
+test('keyboard moves append to the current branch and Previous backs out only one explored move', async () => {
+  const h = harness({ initialState: { ...initial, fen: afterE4, variation: ['e4'], sideToMove: 'black', legalMoves: [{ from: 'e7', to: 'e5' }] }, toolResponses: {
+    show_variation: (call, canonical) => ({ ...canonical, revision: canonical.revision + 1, variation: Array.from(call.arguments.moves) }),
+  } }); await settle();
+  h.getNode('variation').value = 'e5';
+  h.nodes.get('variation-form').listeners.submit({ preventDefault() {} }); await settle();
+  assert.deepEqual(Array.from(h.toolCalls.find(call => call.name === 'show_variation').arguments.moves), ['e4', 'e5']);
+  h.nodes.get('previous').click(); await settle();
+  assert.deepEqual(Array.from(h.canonical.variation), ['e4']);
+  assert.equal(h.toolCalls.filter(call => call.name === 'go_to_move').length, 0);
+  assert.equal(h.nodes.get('variation-trail').children.length, 1);
+});
+
+test('progress-only stale click reads fresh context despite an in-flight poll and retries once', async () => {
+  let attempts = 0;
+  const h = harness({ delayedSync: true, delayedSyncCall: 2, toolResponses: {
+    go_to_move: (call, canonical) => { attempts++; if (attempts === 1) throw new Error('Stale revision: expected 1, current 2'); assert.equal(call.arguments.expectedRevision, 2); return { ...canonical, revision: 3, selectedPly: call.arguments.ply }; },
+    get_review_context: () => ({ ...initial, revision: 2, analysis: { readiness: 'analyzing', completedPositions: 1, totalPositions: 3 } }),
+  } }); await settle();
+  const polling = h.timerCallbacks.at(-1)(); await settle();
+  h.nodes.get('next').click(); await settle();
+  assert.equal(attempts, 2);
+  assert.equal(h.toolCalls.filter(call => call.name === 'get_review_context').length, 1);
+  assert.equal(h.contextCalls.at(-1).structuredContent.revision, 3);
+  h.syncWait.resolve({ structuredContent: { state: initial, changed: true } }); await polling; await settle();
+  assert.equal(h.contextCalls.at(-1).structuredContent.revision, 3);
+});
+
+test('stale click never replays its intent on a changed position and retry submissions never auto-repeat', async () => {
+  let attempts = 0;
+  const changed = harness({ toolResponses: {
+    go_to_move: () => { attempts++; throw new Error('Stale revision: expected 1, current 2'); },
+    get_review_context: () => ({ ...initial, revision: 2, fen: afterE4, selectedPly: 1 }),
+  } }); await settle(); changed.nodes.get('next').click(); await settle();
+  assert.equal(attempts, 1);
+  assert.match(changed.nodes.get('error').textContent, /position changed/);
+  let submissions = 0;
+  const retry = harness({ initialState: { ...ready, retry: hiddenRetry }, toolResponses: { submit_retry: () => { submissions++; throw new Error('Stale revision: current 2'); } } }); await settle();
+  drop(retry, 'g1', 'f3'); await settle();
+  assert.equal(submissions, 1);
+  assert.equal(retry.toolCalls.filter(call => call.name === 'get_review_context').length, 0);
+});
+
+test('semantic game change cancels an existing drag before the library can invoke its new callback', async () => {
+  const h = harness({ catalogResult: { username: null, games: [{ id: initial.gameId, fixture: true }, { id: 'other-game', fixture: true }] }, toolResponses: {
+    select_game: (call, canonical) => ({ ...canonical, gameId: 'other-game', revision: 2 }),
+  } }); await settle();
+  h.board.beginDrag('g1');
+  h.nodes.get('game').value = 'other-game'; h.nodes.get('game').listeners.change(); await settle();
+  assert.equal(h.board.dragOrigin, undefined);
+  h.board.drop('f3'); await settle();
+  assert.equal(h.toolCalls.filter(call => call.name === 'show_variation').length, 0);
+});
+
+test('one overlay is open at a time and Escape restores focus and board interaction', async () => {
+  const h = harness(); await settle();
+  h.nodes.get('learning-panel').open = true; h.nodes.get('learning-panel').listeners.toggle();
+  assert.equal(h.nodes.get('workspace-content').inert, true);
+  h.nodes.get('game-picker-title').click();
+  assert.equal(h.nodes.get('learning-panel').open, false);
+  assert.equal(h.nodes.get('game-picker').hidden, false);
+  h.nodes.get('variation-panel').open = true; h.nodes.get('variation-panel').listeners.toggle();
+  assert.equal(h.nodes.get('game-picker').hidden, true);
+  h.document.listeners.keydown({ key: 'Escape', preventDefault() {} });
+  assert.equal(h.nodes.get('keyboard-toggle').focusCount, 1);
+  assert.equal(h.nodes.get('workspace-content').inert, false);
+});
+
+test('explicit import from sample selects newest real game while background refresh preserves selection', async () => {
+  const games = [{ id: initial.gameId, fixture: true }, { id: 'older-real', endTime: 500 }, { id: 'newest-real', endTime: 1000 }];
+  const explicit = harness({ initialState: { ...initial, sourceLabel: 'Verification fixture (not Brian’s game)' }, toolResponses: {
+    refresh_games: () => ({ username: 'SuppliedAccount', games, import: { status: 'ready' } }),
+    select_game: (call, canonical) => { assert.equal(call.arguments.gameId, 'newest-real'); assert.equal(call.arguments.expectedRevision, 1); return { ...canonical, gameId: call.arguments.gameId, revision: 2, sourceLabel: 'Chess.com public archive' }; },
+  } }); await settle();
+  explicit.nodes.get('username').value = 'SuppliedAccount';
+  explicit.nodes.get('import-form').listeners.submit({ preventDefault() {} }); await settle();
+  assert.equal(explicit.canonical.gameId, 'newest-real');
+  assert.equal(explicit.nodes.get('game-picker').hidden, true);
+  const background = harness({ catalogResult: { username: 'SuppliedAccount', games: [{ id: initial.gameId, fixture: true }] }, toolResponses: {
+    refresh_games: () => ({ username: 'SuppliedAccount', games, import: { status: 'ready' } }),
+  } }); await settle();
+  assert.equal(background.canonical.gameId, initial.gameId);
+  assert.equal(background.toolCalls.filter(call => call.name === 'select_game').length, 0);
+});
+
+test('successful keyboard move closes the overlay and restores board focus while an error remains correctable', async () => {
+  for (const succeeds of [true, false]) {
+    const h = harness({ toolResponses: {
+      show_variation: (call, canonical) => { if (!succeeds) throw new Error('Illegal move input'); return { ...canonical, revision: 2, fen: afterE4, variation: ['e4'] }; },
+    } }); await settle();
+    h.nodes.get('variation-panel').open = true; h.nodes.get('variation-panel').listeners.toggle();
+    h.getNode('variation').value = 'e4';
+    h.nodes.get('variation-form').listeners.submit({ preventDefault() {} }); await settle();
+    assert.equal(h.nodes.get('variation-panel').open, !succeeds);
+    assert.equal(h.nodes.get('workspace-content').inert, !succeeds);
+    if (succeeds) { assert.equal(h.nodes.get('position').focusCount, 1); assert.equal(h.boardConfigurations.at(-1).fen, afterE4); }
+    else { assert.equal(h.nodes.get('drawer-error').hidden, false); assert.match(h.nodes.get('drawer-error').textContent, /Illegal move input/); }
+  }
+});
+
+test('displayed player guide records exposure through one cached canonical evidence read', async () => {
+  const shown = harness({ initialState: guided }); await settle();
+  const reads = shown.toolCalls.filter(call => call.name === 'get_position_evidence');
+  assert.equal(reads.length, 1);
+  assert.equal(reads[0].arguments.sessionId, guided.sessionId);
+  assert.equal(reads[0].arguments.expectedRevision, guided.revision);
+  await shown.timerCallbacks.at(-1)(); await settle();
+  assert.equal(shown.toolCalls.filter(call => call.name === 'get_position_evidence').length, 1);
+  const opponent = harness({ initialState: { ...guided, playerColor: 'black' } }); await settle();
+  assert.equal(opponent.toolCalls.filter(call => call.name === 'get_position_evidence').length, 0);
+  const off = harness({ initialState: guided, delayedSync: true }); await settle();
+  off.nodes.get('engine-toggle').click();
+  off.syncWait.resolve({ structuredContent: { state: guided, changed: true } }); await settle();
+  assert.equal(off.toolCalls.filter(call => call.name === 'get_position_evidence').length, 0);
+  assert.equal(off.boardConfigurations.at(-1).drawable.autoShapes.length, 0);
+  const hidden = harness({ initialState: { ...guided, retry: hiddenRetry } }); await settle();
+  assert.equal(hidden.toolCalls.filter(call => call.name === 'get_position_evidence').length, 0);
 });
