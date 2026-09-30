@@ -13,9 +13,9 @@ h2 { font-size: 16px; font-weight: 600; }
 .game-identity h2 { white-space: nowrap; flex-shrink: 0; }
 .source-note, #game-meta { font-size: 14px; color: var(--review-muted); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .workspace-content { display: grid; grid-template-rows: minmax(0, 1fr) auto; gap: 10px; min-width: 0; min-height: 0; }
-.board-workspace { position: relative; display: grid; grid-template-rows: 34px minmax(0, 1fr) 34px 42px 22px; gap: 4px; min-width: 0; min-height: 0; }
-.board-slot { display: grid; place-items: center; min-width: 0; min-height: 0; container-type: size; }
-.board-shell { width: min(100cqw, 100cqh); aspect-ratio: 1; border-radius: 8px; overflow: hidden; }
+.board-workspace { position: relative; display: grid; grid-template-rows: minmax(0, 1fr) 42px 22px; gap: 4px; min-width: 0; min-height: 0; container-type: size; }
+.board-slot { display: grid; place-items: center; min-width: 0; min-height: 0; }
+.board-shell { width: 100%; aspect-ratio: 1; border-radius: 8px; overflow: hidden; }
 .board.cg-wrap { width: 100%; height: 100%; }
 .board cg-board { background-color: #ebecd0; background-image: conic-gradient(#779556 25%, #ebecd0 0 50%, #779556 0 75%, #ebecd0 0); background-size: 25% 25%; }
 .board coords { color: #243519; font-size: 11px; opacity: 1; font-weight: 650; }
@@ -95,5 +95,63 @@ summary { font-size: 14px; font-weight: 550; cursor: pointer; padding: 6px 0; }
 .sr-only { position: absolute; width: 1px; height: 1px; padding: 0; margin: -1px; overflow: hidden; clip: rect(0, 0, 0, 0); white-space: nowrap; border: 0; }
 [hidden] { display: none !important; }
 @media (min-width: 700px) { .workspace-content { grid-template-rows: minmax(0, 1fr); grid-template-columns: minmax(0, 1fr) 290px; gap: 24px; } .workbench { gap: 14px; padding-top: 8px; } #key-moments-panel { display: block; } #key-moments { margin-top: 8px; } .engine-actions { gap: 8px; } }
-@media (max-width: 420px) { .review { padding: 8px 10px; gap: 5px; grid-template-rows: 38px 22px minmax(0, 1fr) 30px; } .board-workspace { grid-template-rows: 30px minmax(0, 1fr) 30px 38px 20px; gap: 2px; } .btn { padding-inline: 10px; min-height: 36px; } .workbench { gap: 5px; } #key-moments-panel h2 { font-size: 14px; } .player-bar { gap: 6px; } .drawer { inset-inline: 10px; padding: 14px; } }
+@media (max-width: 420px) { .review { padding: 8px 10px; gap: 5px; grid-template-rows: 38px 22px minmax(0, 1fr) 30px; } .board-workspace { grid-template-rows: minmax(0, 1fr) 38px 20px; gap: 2px; } .btn { padding-inline: 10px; min-height: 36px; } .workbench { gap: 5px; } #key-moments-panel h2 { font-size: 14px; } .player-bar { gap: 6px; } .drawer { inset-inline: 10px; padding: 14px; } }
 @media (prefers-reduced-motion: reduce) { *, *::before, *::after { transition: none !important; } }
+/* Guided review keeps the board central and advanced controls in their own mode. */
+.review-modes { display: flex; gap: 6px; min-width: 0; }
+.review-modes .btn { flex: 1; min-width: 0; }
+.review-modes .btn[aria-pressed="true"] { border-color: var(--review-accent); background: color-mix(in srgb, var(--review-soft) 78%, var(--review-accent)); }
+.review-overview, .coach-panel { min-width: 0; padding: 12px; border-radius: 10px; background: var(--review-soft); }
+.review-overview h2, .coach-panel h2 { font-size: 17px; margin-bottom: 6px; }
+.classification-counts { display: grid; grid-template-columns: 1fr 1fr; gap: 6px 16px; margin: 12px 0; }
+.count-row { display: flex; justify-content: space-between; gap: 6px; font-size: 14px; }
+.count-row strong { color: var(--review-text); font-variant-numeric: tabular-nums; }
+#start-review { width: 100%; }
+.coach-panel .assessment { padding: 0 0 8px; flex-wrap: wrap; }
+.coach-panel .classification { font-size: 18px; }
+#coach-facts { font-size: 15px; line-height: 1.45; }
+.coach-actions { display: flex; flex-wrap: wrap; gap: 6px; margin-top: 10px; }
+.coach-actions .btn { flex: 1; }
+#coach-message { margin-top: 8px; }
+.evaluation-chart { min-height: 0; }
+.chart-heading { display: flex; justify-content: space-between; font-size: 12px; color: var(--review-muted); }
+.evaluation-graph { display: flex; height: 44px; width: 100%; position: relative; border-radius: 6px; background: linear-gradient(to bottom, var(--review-soft) 49%, var(--review-border) 49%, var(--review-border) 51%, var(--review-soft) 51%); overflow: hidden; }
+.evaluation-point { position: relative; flex: 1; min-width: 1px; height: 100%; padding: 0; margin: 0; border: 0; background: transparent; cursor: pointer; }
+.evaluation-point::after { content: ''; position: absolute; left: 0; right: 0; top: calc(50% - max(0, var(--advantage)) * 6.25%); height: max(2px, calc(max(var(--advantage), calc(-1 * var(--advantage))) * 6.25%)); background: var(--review-accent); opacity: .55; }
+.evaluation-point[aria-current="true"] { background: color-mix(in srgb, var(--review-accent) 30%, transparent); }
+.evaluation-point:not(:disabled):hover::after { opacity: 1; }
+.moment-heading { display: flex; align-items: center; justify-content: space-between; gap: 8px; }
+.moment-heading h2 { font-size: 15px; }
+#key-moments-panel { display: block; }
+#key-moments { margin-top: 6px; }
+#key-moments .moment { font-size: 13px; }
+.move-list { display: grid; grid-template-columns: 1fr 1fr; gap: 8px; margin-top: 12px; }
+.move-list .moment { text-align: left; font-size: 15px; white-space: normal; }
+#engine-mode-panel { border-top: 1px solid var(--review-border); padding-top: 8px; }
+@media (min-width: 700px) {
+  .workspace-content { grid-template-columns: minmax(0, 1fr) 320px; gap: 20px; }
+  .workbench { display: flex; flex-direction: column; gap: 12px; overflow: auto; scrollbar-width: thin; }
+  .workbench > * { flex-shrink: 0; }
+}
+@media (max-width: 699px) {
+  .workspace-content { grid-template-rows: minmax(0, 1fr) auto; }
+  .workbench { gap: 6px; }
+  .review-overview, .coach-panel { padding: 9px 10px; }
+  .coach-panel h2 { font-size: 15px; margin-bottom: 3px; }
+  .coach-panel .classification { font-size: 16px; }
+  #coach-facts { font-size: 14px; }
+  .coach-actions { margin-top: 7px; }
+  .classification-counts { gap: 4px 12px; margin: 8px 0; }
+  .evaluation-graph { height: 28px; }
+  .chart-heading { display: none; }
+  #key-moments { display: none; }
+  #key-moments-panel .moment-heading h2 { display: none; }
+  #next-moment { width: 100%; }
+  .secondary-tools { gap: 16px; }
+}
+
+/* Size the player-board group together, so labels stay next to the board. */
+.board-cluster { width: min(100cqw, max(80px, calc(100cqh - 140px))); display: grid; grid-template-rows: 34px auto 34px; gap: 4px; place-self: center; min-width: 0; }
+@media (max-width: 699px) { .board-workspace { grid-template-rows: minmax(0, 1fr) 38px 20px; } .board-cluster { width: min(100cqw, max(80px, calc(100cqh - 128px))); grid-template-rows: 30px auto 30px; gap: 2px; } }
+
+.coaching-note { font-size: 15px; line-height: 1.5; padding-top: 4px; }

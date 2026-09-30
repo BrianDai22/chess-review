@@ -13,7 +13,7 @@ const tick = () => new Promise(resolve => setImmediate(resolve));
 async function settle() { for (let i = 0; i < 6; i++) await tick(); }
 function deferred() { let resolve; const promise = new Promise(r => resolve = r); return { promise, resolve }; }
 
-function harness({ delayedContext = false, delayedSync = false, delayedSyncCall = 1, delayedLaunch = false, failedContextCalls = 0, initialState = initial, launchState, toolResponses = {}, catalogResult } = {}) {
+function harness({ delayedContext = false, delayedSync = false, delayedSyncCall = 1, delayedLaunch = false, failedContextCalls = 0, initialState = initial, launchState, toolResponses = {}, catalogResult, hostMessage = true, hostExperimentalMessage = false, messageResult = {}, delayedMessage = false } = {}) {
   const nodes = new Map();
   function node() {
     return { textContent: '', value: '', hidden: false, disabled: false, open: false, focusCount: 0, listeners: {}, children: [], dataset: {}, attributes: {},
@@ -27,13 +27,15 @@ function harness({ delayedContext = false, delayedSync = false, delayedSyncCall 
     getElementById(id) { if (!nodes.has(id)) nodes.set(id, node()); return nodes.get(id); },
     createElement: node, createDocumentFragment: node,
     addEventListener(name, fn) { this.listeners[name] = fn; } };
-  const contextCalls = [], toolCalls = [], timerCallbacks = [], boardConfigurations = [];
-  const contextWait = deferred(), syncWait = deferred(), launchWait = deferred();
+  const messageCalls = [], contextCalls = [], toolCalls = [], timerCallbacks = [], boardConfigurations = [];
+  const contextWait = deferred(), syncWait = deferred(), launchWait = deferred(), messageWait = deferred();
   let now = 0;
   let canonical = { ...initialState }, appInstance, boardInstance;
   class App {
     constructor() { appInstance = this; }
     addEventListener() {}
+    getHostCapabilities() { return { ...(hostMessage ? { message: { text: {} } } : {}), ...(hostExperimentalMessage ? { experimental: { 'openai/message': {} } } : {}) }; }
+    async sendMessage(message) { messageCalls.push(message); return delayedMessage ? messageWait.promise : messageResult; }
     getHostContext() { return { displayMode: 'fullscreen', availableDisplayModes: ['fullscreen'], theme: 'light' }; }
     async connect() { if (delayedLaunch) await launchWait.promise; this.ontoolresult({ structuredContent: launchState || canonical }); }
     async callServerTool(call) {
@@ -57,7 +59,8 @@ function harness({ delayedContext = false, delayedSync = false, delayedSyncCall 
     }
   }
   class OpenAIExtensions {
-    constructor() { this.modelContext = { update: async data => {
+    get message() { return hostExperimentalMessage ? { send: (params, options) => this.app.sendMessage(params, options) } : undefined; }
+    constructor(app) { this.app = app; this.modelContext = { update: async data => {
       contextCalls.push(data);
       if (contextCalls.length <= failedContextCalls) throw new Error('Temporary native bridge failure');
       if (delayedContext && contextCalls.length === 1) return contextWait.promise;
@@ -80,7 +83,7 @@ function harness({ delayedContext = false, delayedSync = false, delayedSyncCall 
     Date: { now: () => now },
     applyDocumentTheme() {}, applyHostStyleVariables() {},
     setTimeout(fn) { timerCallbacks.push(fn); return timerCallbacks.length; }, clearTimeout() {}, console });
-  return { nodes, document, getNode: id => document.getElementById(id), contextCalls, toolCalls, timerCallbacks, boardConfigurations, contextWait, syncWait, launchWait, setNow(value) { now = value; },
+  return { nodes, document, getNode: id => document.getElementById(id), messageCalls, messageWait, contextCalls, toolCalls, timerCallbacks, boardConfigurations, contextWait, syncWait, launchWait, setNow(value) { now = value; },
     get canonical() { return canonical; }, get app() { return appInstance; }, get board() { return boardInstance; } };
 }
 
@@ -741,4 +744,168 @@ test('displayed player guide records exposure through one cached canonical evide
   assert.equal(off.boardConfigurations.at(-1).drawable.autoShapes.length, 0);
   const hidden = harness({ initialState: { ...guided, retry: hiddenRetry } }); await settle();
   assert.equal(hidden.toolCalls.filter(call => call.name === 'get_position_evidence').length, 0);
+});
+
+
+const overviewGame = { ...guided, selectedPly: 0, analysis: { ...guided.analysis, selectedMove: null,
+  moveAssessments: [{ ply: 1, san: 'e4', color: 'w', label: 'Good', loss: 3, cp: 35 }, { ply: 2, san: 'e5', color: 'b', label: 'Mistake', loss: 13, cp: 150 }] } };
+
+test('overview shows canonical move counts and Start review uses guarded first-move navigation', async () => {
+  const h = harness({ initialState: overviewGame }); await settle();
+  assert.equal(h.nodes.get('review-overview').hidden, false);
+  assert.equal(h.nodes.get('coach-panel').hidden, true);
+  assert.equal(h.nodes.get('classification-counts').children.find(row => row.dataset.grade === 'Good').children[1].textContent, '1 / 0');
+  h.nodes.get('start-review').click(); await settle();
+  const call = h.toolCalls.find(call => call.name === 'go_to_move');
+  assert.deepEqual({ ...call.arguments }, { sessionId: 'review-one', expectedRevision: 1, ply: 1 });
+  assert.equal(h.nodes.get('review-overview').hidden, true);
+});
+
+test('guided review separates correction from engine continuation and restores the played move', async () => {
+  const bad = { ...guided, selectedPly: 2, analysis: { ...guided.analysis, selectedMove: { ply: 2, san: 'e5', color: 'b', classification: { label: 'Mistake', loss: 13 } } } };
+  const h = harness({ initialState: bad, toolResponses: {
+    show_best_move: (call, canonical) => ({ ...canonical, revision: 2, selectedPly: call.arguments.ply - 1, variation: ['c5'], analysis: { ...canonical.analysis, selectedMove: { ply: 1, san: 'e4', color: 'w', classification: { label: 'Good' } }, currentPosition: null } }),
+    go_to_move: (call, canonical) => ({ ...bad, revision: canonical.revision + 1, selectedPly: call.arguments.ply, variation: [] }),
+  } }); await settle();
+  assert.equal(h.nodes.get('show-better').hidden, false);
+  assert.equal(h.nodes.get('engine-mode-panel').hidden, true);
+  h.nodes.get('show-better').click(); await settle();
+  const correction = h.toolCalls.find(call => call.name === 'show_best_move');
+  assert.equal(correction.arguments.ply, 2);
+  assert.equal(correction.arguments.expectedRevision, 1);
+  assert.equal(h.nodes.get('resume-played').hidden, false);
+  assert.equal(h.nodes.get('coach-title').textContent, 'Compare the better move');
+  assert.match(h.nodes.get('coach-facts').textContent, /replaces e5/);
+  assert.equal(h.nodes.get('classification').textContent, '');
+  h.nodes.get('resume-played').click(); await settle();
+  assert.equal(h.toolCalls.find(call => call.name === 'go_to_move').arguments.ply, 2);
+  assert.equal(h.nodes.get('resume-played').hidden, true);
+  assert.equal(h.nodes.get('classification').textContent, 'e5 · Mistake');
+  h.nodes.get('engine-mode').click();
+  assert.equal(h.nodes.get('engine-mode-panel').hidden, false);
+  assert.equal(h.nodes.get('coach-panel').hidden, true);
+});
+
+test('move list and evaluation graph use one canonical projection and guarded navigation', async () => {
+  const h = harness({ initialState: overviewGame }); await settle();
+  assert.equal(h.nodes.get('move-list').children.length, 2);
+  assert.equal(h.nodes.get('move-list').children[1].textContent, '1... e5 · Mistake');
+  assert.equal(h.nodes.get('evaluation-graph').children.length, 2);
+  assert.match(h.nodes.get('evaluation-graph').children[1].attributes['aria-label'], /White 1.50/);
+  h.nodes.get('moves-panel').open = true; h.nodes.get('moves-panel').listeners.toggle();
+  h.nodes.get('move-list').children[1].click(); await settle();
+  assert.equal(h.toolCalls.find(call => call.name === 'go_to_move').arguments.ply, 2);
+  assert.equal(h.nodes.get('moves-panel').open, false);
+  assert.equal(h.nodes.get('position').focusCount, 1);
+});
+
+test('Next key moment follows ordered canonical moments and loops after the last moment', async () => {
+  const h = harness({ initialState: { ...ready, analysis: { ...ready.analysis, keyMoments: [{ ply: 1 }, { ply: 2 }] } } }); await settle();
+  h.nodes.get('next-moment').click(); await settle();
+  assert.equal(h.toolCalls.find(call => call.name === 'go_to_move').arguments.ply, 2);
+  assert.equal(h.nodes.get('next-moment').textContent, 'First key moment');
+  h.nodes.get('next-moment').click(); await settle();
+  assert.equal(h.toolCalls.filter(call => call.name === 'go_to_move').at(-1).arguments.ply, 1);
+});
+
+test('Explain this move sends explicit acknowledged state to native chat without mutating the board', async () => {
+  const h = harness({ initialState: guided }); await settle();
+  h.nodes.get('explain-move').click(); await settle();
+  assert.equal(h.messageCalls.length, 1);
+  assert.equal(h.messageCalls[0].role, 'user');
+  const prompt = h.messageCalls[0].content[0].text;
+  assert.match(prompt, /"sessionId":"review-one"/);
+  assert.match(prompt, /require revision 1/);
+  assert.match(prompt, /Do not invent engine facts, change the board/);
+  assert.equal(h.toolCalls.some(call => ['go_to_move', 'show_variation', 'show_best_move'].includes(call.name)), false);
+  assert.equal(h.nodes.get('coach-message').textContent, 'Explanation requested in chat.');
+});
+
+test('native coaching rejects unavailable hosts and does not send from unacknowledged or hidden states', async () => {
+  const unavailable = harness({ initialState: guided, hostMessage: false }); await settle();
+  unavailable.nodes.get('explain-move').click(); await settle();
+  assert.equal(unavailable.messageCalls.length, 0);
+  assert.match(unavailable.nodes.get('error').textContent, /Ask.*native chat/);
+  const delayed = harness({ initialState: guided, delayedContext: true }); await settle();
+  assert.equal(delayed.nodes.get('explain-move').disabled, true);
+  delayed.nodes.get('explain-move').listeners.click(); await settle();
+  assert.equal(delayed.messageCalls.length, 0);
+  assert.match(delayed.nodes.get('error').textContent, /still connecting/);
+  const hidden = harness({ initialState: { ...overviewGame, retry: hiddenRetry } }); await settle();
+  hidden.nodes.get('explain-move').listeners.click(); await settle();
+  assert.equal(hidden.messageCalls.length, 0);
+  assert.equal(hidden.nodes.get('classification-counts').children.every(row => row.children[1].textContent === '0 / 0'), true);
+  assert.equal(hidden.nodes.get('move-list').children.length, 0);
+  assert.equal(hidden.nodes.get('evaluation-graph').children.length, 0);
+  assert.equal(hidden.nodes.get('coach-facts').textContent, '');
+  assert.equal(hidden.nodes.get('show-better').hidden, true);
+});
+
+test('late coaching responses cannot place success feedback on a different position and rejection is actionable', async () => {
+  const h = harness({ initialState: guided, delayedMessage: true }); await settle();
+  h.nodes.get('explain-move').click(); await settle();
+  h.nodes.get('next').click(); await settle();
+  h.messageWait.resolve({}); await settle();
+  assert.equal(h.nodes.get('coach-message').hidden, true);
+  const rejected = harness({ initialState: guided, messageResult: { isError: true } }); await settle();
+  rejected.nodes.get('explain-move').click(); await settle();
+  assert.match(rejected.nodes.get('error').textContent, /host rejected.*native chat/);
+});
+
+
+test('board coaching notes are plain text, position-bound, and suppressed during hidden retry', async () => {
+  const note = { sessionId: guided.sessionId, gameId: guided.gameId, revision: guided.revision, fen: guided.fen, text: 'Develop the knight to protect the center.' };
+  const h = harness({ initialState: { ...guided, coachingNote: note } }); await settle();
+  assert.equal(h.nodes.get('coaching-note').hidden, false);
+  assert.equal(h.nodes.get('coaching-note').textContent, `AI coach: ${note.text}`);
+  assert.equal(h.nodes.get('coach-facts').hidden, true);
+  for (const invalid of [{ ...note, revision: 2 }, { ...note, fen: afterE4 }, { ...note, sessionId: 'other' }]) {
+    const stale = harness({ initialState: { ...guided, coachingNote: invalid } }); await settle();
+    assert.equal(stale.nodes.get('coaching-note').hidden, true);
+    assert.equal(stale.nodes.get('coaching-note').textContent, '');
+  }
+  const hidden = harness({ initialState: { ...guided, coachingNote: note, retry: hiddenRetry } }); await settle();
+  assert.equal(hidden.nodes.get('coaching-note').hidden, true);
+  assert.equal(hidden.nodes.get('coaching-note').textContent, '');
+});
+
+
+test('same-revision polling displays a newly published derived coaching note', async () => {
+  let published = false;
+  const note = { sessionId: guided.sessionId, gameId: guided.gameId, revision: guided.revision, fen: guided.fen, text: 'Protect the center with development.' };
+  const h = harness({ initialState: guided, toolResponses: { sync_review_view: () => ({ changed: false, state: { ...guided, ...(published ? { coachingNote: note } : {}) } }) } }); await settle();
+  assert.equal(h.nodes.get('coaching-note').hidden, true);
+  published = true; await h.timerCallbacks.at(-1)(); await settle();
+  assert.equal(h.nodes.get('coaching-note').textContent, `AI coach: ${note.text}`);
+  assert.equal(h.canonical.revision, 1);
+  assert.equal(h.contextCalls.at(-1).structuredContent.coachingNote.text, note.text);
+});
+
+
+test('experimental OpenAI message capability supports coaching through the existing active-chat bridge', async () => {
+  const h = harness({ initialState: guided, hostMessage: false, hostExperimentalMessage: true }); await settle();
+  h.nodes.get('explain-move').click(); await settle();
+  assert.equal(h.messageCalls.length, 1);
+  const message = h.messageCalls[0];
+  assert.equal(message.role, 'user');
+  assert.equal(message._meta['openai/message'].target, 'active');
+  assert.equal(message._meta['openai/message'].send, true);
+  assert.match(message.content[0].text, /require revision 1/);
+  assert.equal(h.nodes.get('error').hidden, true);
+});
+
+test('manual branch has a directly accessible Return to game in guided review', async () => {
+  const branch = { ...guided, variation: ['e4'], fen: afterE4, sideToMove: 'black', analysis: { ...guided.analysis, currentPosition: null } };
+  const h = harness({ initialState: branch, toolResponses: { return_to_game: (call, canonical) => ({ ...guided, revision: canonical.revision + 1, variation: [] }) } }); await settle();
+  assert.equal(h.nodes.get('engine-mode-panel').hidden, true);
+  assert.equal(h.nodes.get('coach-return').hidden, false);
+  assert.equal(h.nodes.get('coach-return').disabled, false);
+  h.nodes.get('coach-return').click(); await settle();
+  const call = h.toolCalls.find(call => call.name === 'return_to_game');
+  assert.equal(call.arguments.sessionId, branch.sessionId);
+  assert.equal(call.arguments.expectedRevision, branch.revision);
+  assert.equal(h.nodes.get('coach-return').hidden, true);
+  const hidden = harness({ initialState: { ...branch, retry: hiddenRetry } }); await settle();
+  assert.equal(hidden.nodes.get('coach-return').hidden, true);
+  assert.equal(hidden.nodes.get('coach-return').disabled, true);
 });

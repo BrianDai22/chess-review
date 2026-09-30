@@ -48,7 +48,9 @@ Manual controls call `app.callServerTool({ name, arguments })`, commit through t
 
 After initialization, `extensions.modelContext` can remain undefined when unsupported. `extensions.modelContext.update({ content, structuredContent })` calls `ui/update-model-context` and parses `_meta["openai/modelContext"].updateId`. That ID proves host attachment acceptance. It proves neither backend commit nor model consumption. A separate app-only backend acknowledgement records the displayed revision and accepted context update ID. Do not record context acceptance before the await resolves, do not let delayed responses replace newer rendered revisions, and do not call a change displayed before a live mount acknowledges it.
 
-Use `extensions.message?.send({ role: "user", content })` only for an explicit Explain action, after publishing and awaiting current context. Navigation by itself does not start a model turn. Production coaching uses semantic chess tools and native chat, with no separate model endpoint.
+Use the advertised `extensions.message.send({ role: "user", content, _meta: { "openai/message": { target: "active", send: true } } })`, or standard `app.sendMessage` when the host advertises text-message support, only for an explicit Explain action after publishing and awaiting current context. The extension wraps the same MCP Apps message bridge; it is advertised through `experimental["openai/message"]`. Navigation by itself does not start a model turn. Production coaching uses semantic chess tools and native chat, with no separate model endpoint.
+
+The native model publishes a short `publish_coaching_note` only after reading the requested position and checked evidence. Notes live in their own store namespace and carry exact session, game, revision, FEN, ply, and variation identity. They do not change the selected position or canonical score. App-only sync returns fresh context even for unchanged revisions, so new notes appear without a navigation mutation. Notes disappear after position changes or while answers are hidden.
 
 ## Theme and minimal presentation
 

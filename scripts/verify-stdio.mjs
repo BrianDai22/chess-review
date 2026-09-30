@@ -73,7 +73,7 @@ try {
   assert.match(pawnSvg, /<svg\b/);
   assert.match(pawnSvg, /<path\b/);
   const tools = await client.listTools();
-  for (const name of ['open_review', 'list_games', 'analyze_game', 'start_retry', 'submit_retry', 'get_position_evidence', 'check_candidate']) assert.ok(tools.tools.some(tool => tool.name === name), `Missing compiled tool ${name}`);
+  for (const name of ['open_review', 'list_games', 'analyze_game', 'start_retry', 'submit_retry', 'get_position_evidence', 'check_candidate', 'show_best_move', 'publish_coaching_note']) assert.ok(tools.tools.some(tool => tool.name === name), `Missing compiled tool ${name}`);
   const syncTool = tools.tools.find(tool => tool.name === 'sync_review_view');
   assert.deepEqual(syncTool._meta.ui.visibility, ['app']);
   const catalog = await call(client, 'list_games');
@@ -137,6 +137,26 @@ try {
   assert.equal(second.selectedPly, 0);
   record('automatic pinned-engine game analysis', `${first.analysis.totalPositions} positions; white ${first.analysis.accuracy.w.toFixed(3)}, black ${first.analysis.accuracy.b.toFixed(3)}`);
 
+  assert.equal(first.analysis.moveAssessments.length, 7);
+  assert.deepEqual([...new Set(first.analysis.moveAssessments.map(move => move.color))].sort(), ['b', 'w']);
+  first = await call(client, 'go_to_move', { ...guard(first), ply: 6 });
+  first = await call(client, 'show_best_move', { ...guard(first), ply: 6 });
+  assert.equal(first.selectedPly, 5, 'Correction must start before the reviewed move');
+  assert.equal(first.variation.length, 1);
+  const comparisonRevision = first.revision;
+  first = await call(client, 'publish_coaching_note', { ...guard(first), text: 'Verification note for this exact comparison position.' });
+  assert.equal(first.revision, comparisonRevision, 'A derived note must not navigate or change revision');
+  assert.equal(first.coachingNote.label, 'AI interpretation');
+  assert.equal(first.coachingNote.fen, first.fen);
+  const noteSync = await call(client, 'sync_review_view', { sessionId: first.sessionId, mountId: 'stdio-verifier', knownRevision: first.revision });
+  assert.equal(noteSync.changed, false);
+  assert.equal(noteSync.state.coachingNote.text, first.coachingNote.text);
+  first = await call(client, 'go_to_move', { ...guard(first), ply: 6 });
+  assert.equal(first.coachingNote, undefined, 'Navigation must hide stale coaching');
+  assert.equal(JSON.stringify(readRecord('analyses', gameId)), frozenAnalysis);
+  assert.equal(readRecord('games', gameId).pgn, originalPgn);
+  record('review comparison and guarded coaching note', 'Correct before-move branch, resume, same-revision note sync and stale-note hiding; scores preserved');
+
   first = await call(client, 'start_retry', { ...guard(first), ply: 7 });
   assert.equal(first.selectedPly, 6);
   assert.equal(first.retry.answerExposed, false);
@@ -145,11 +165,15 @@ try {
   assert.equal(first.analysis.currentPosition, undefined);
   assert.equal(first.analysis.selectedMove, undefined);
   assert.equal(first.analysis.keyMoments, undefined);
+  assert.equal(first.analysis.moveAssessments, undefined);
+  assert.equal(first.coachingNote, undefined);
   assert.equal(first.playedMoves.length, 6);
   assert.equal(first.learning, undefined);
   await blocked(client, 'get_position_evidence', guard(first), /retry attempt|checking answers/i);
   await blocked(client, 'check_candidate', { ...guard(first), move: 'Qxf7#' }, /retry attempt|checking answers/i);
   await blocked(client, 'show_variation', { ...guard(first), moves: ['Qxf7#'] }, /retry attempt|showing an answer/i);
+  await blocked(client, 'show_best_move', { ...guard(first), ply: 7 }, /retry attempt|showing an answer/i);
+  await blocked(client, 'publish_coaching_note', { ...guard(first), text: 'This must stay hidden.' }, /retry attempt|coaching/i);
   first = await call(client, 'retry_hint', retryGuard(first));
   assert.equal(first.retry.hintsUsed, 1);
   assert.equal(first.retry.answerExposed, false);

@@ -37,6 +37,11 @@ let evidencePending;
 let evidenceAttempted;
 let evidenceError;
 let activeDrawer;
+let reviewStarted = false;
+let reviewMode = 'review';
+let comparisonAnchor;
+let explainInFlight = false;
+let lastExplained;
 const guideExposures = new Set();
 
 document.body.innerHTML = `<main class="review" aria-label="Chess review">
@@ -45,28 +50,34 @@ document.body.innerHTML = `<main class="review" aria-label="Chess review">
   <section class="game-identity" aria-label="Current game"><h2 id="game-title">Review game</h2><span id="game-meta" class="muted" hidden></span><span id="game-source" class="source-note" hidden></span></section>
   <div class="workspace-content" id="workspace-content">
     <section class="board-workspace" aria-label="Selected position">
-      <div class="player-bar" id="opponent-bar"><span class="player-piece" id="opponent-piece" aria-hidden="true"></span><div class="player-identity"><strong id="opponent-name"></strong><span id="opponent-rating" class="muted"></span></div><span id="opponent-accuracy" class="player-score" hidden></span><span id="opponent-turn" class="sr-only" hidden>To move</span></div>
+      <div class="board-cluster"><div class="player-bar" id="opponent-bar"><span class="player-piece" id="opponent-piece" aria-hidden="true"></span><div class="player-identity"><strong id="opponent-name"></strong><span id="opponent-rating" class="muted"></span></div><span id="opponent-accuracy" class="player-score" hidden></span><span id="opponent-turn" class="sr-only" hidden>To move</span></div>
       <div class="board-slot"><div class="board-shell"><div id="board" class="board cg-wrap" role="img" aria-label="Chess position" aria-describedby="accessible-position board-instruction"></div></div></div>
       <fieldset id="promotion-panel" class="promotion-panel" hidden><legend>Choose promotion</legend><div id="promotion-choices" class="promotion-choices"></div><button id="cancel-promotion" class="btn btn-secondary" type="button">Cancel</button></fieldset>
       <div class="player-bar" id="player-bar"><span class="player-piece" id="player-piece" aria-hidden="true"></span><div class="player-identity"><strong id="player-name"></strong><span id="player-rating" class="muted"></span></div><span id="accuracy-assessment" class="player-score" hidden><span>Accuracy </span><strong id="accuracy"></strong></span><span id="player-turn" class="sr-only" hidden>To move</span></div>
-      <nav class="move-navigation" aria-label="Played line navigation"><button id="previous" class="btn btn-secondary" type="button" aria-label="Previous move" disabled>Previous</button><span id="position" tabindex="-1" aria-live="polite">Start position</span><button id="next" class="btn btn-secondary" type="button" aria-label="Next move" disabled>Next</button></nav>
+      </div><nav class="move-navigation" aria-label="Played line navigation"><button id="previous" class="btn btn-secondary" type="button" aria-label="Previous move" disabled>Previous</button><span id="position" tabindex="-1" aria-live="polite">Start position</span><button id="next" class="btn btn-secondary" type="button" aria-label="Next move" disabled>Next</button></nav>
       <p id="board-instruction" class="board-instruction">Move a piece to explore</p>
     </section>
     <aside class="workbench" aria-label="Review tools">
+      <nav id="review-modes" class="review-modes" aria-label="Review mode"><button id="review-mode" class="btn btn-secondary" aria-pressed="true" type="button">Review</button><button id="engine-mode" class="btn btn-secondary" aria-pressed="false" type="button">Engine</button><button id="overview-toggle" class="btn btn-secondary" type="button">Overview</button></nav>
+      <section id="review-overview" class="review-overview" aria-label="Review overview" hidden><h2>Your game at a glance</h2><p id="overview-summary" class="muted"></p><div id="classification-counts" class="classification-counts"></div><button id="start-review" class="btn btn-primary" type="button" disabled>Start review</button></section>
+      <section id="coach-panel" class="coach-panel" aria-label="Move review"><h2 id="coach-title">Choose a move</h2><div class="assessment" id="assessment" hidden><div class="metric" id="move-assessment"><strong id="classification" class="classification"></strong></div><div class="metric" id="position-assessment"><strong id="evaluation"></strong></div></div><p id="coach-facts"></p><p id="coaching-note" class="coaching-note" aria-live="polite" hidden></p><div class="coach-actions"><button id="show-better" class="btn btn-primary" type="button" hidden disabled>Show better move</button><button id="resume-played" class="btn btn-primary" type="button" hidden disabled>Resume played move</button><button id="coach-return" class="btn btn-secondary" type="button" hidden disabled>Return to game</button><button id="explain-move" class="btn btn-secondary" type="button" disabled>Explain this move</button></div><p id="coach-message" class="muted" role="status" hidden></p></section>
+      <section id="evaluation-chart" class="evaluation-chart" aria-label="Game evaluation" hidden><div class="chart-heading"><span>White advantage</span><span>Black advantage</span></div><div id="evaluation-graph" class="evaluation-graph" aria-label="Select a move on the evaluation graph"></div></section>
+      <div id="engine-mode-panel" hidden>
       <section id="engine-guide" class="engine-guide" aria-label="Engine guide"><div class="engine-actions"><button id="engine-toggle" class="btn btn-secondary" type="button" aria-pressed="true">Engine on</button><button id="engine-play" class="btn btn-primary" type="button" disabled>Play best move</button><button id="return" class="btn btn-secondary" type="button" disabled hidden>Return to game</button></div><p id="engine-status" class="muted" aria-live="polite"></p><div id="engine-line" class="line-trail" aria-label="Checked engine continuation"></div></section>
+      </div>
       <div id="variation-trail" class="line-trail" aria-label="Explored moves" hidden></div>
-      <section class="review-results" aria-label="Game analysis"><div class="assessment" id="assessment" hidden><div class="metric" id="move-assessment"><strong id="classification" class="classification"></strong></div><div class="metric" id="position-assessment"><strong id="evaluation"></strong></div></div><div class="review-actions" id="review-actions"><button id="analyze" class="btn btn-primary" type="button" disabled>Analyze game</button><div class="analysis-progress" id="analysis-progress" hidden><p id="analysis-status" aria-live="polite"></p><progress id="analysis-meter" aria-label="Game analysis progress" hidden></progress></div><button id="start-retry" class="btn btn-secondary" type="button" disabled hidden>Retry this move</button></div></section>
-      <section id="key-moments-panel" aria-label="Key moments" hidden><h2>Key moments</h2><div id="key-moments" class="moment-list"></div></section>
+      <section class="review-results" aria-label="Game analysis"><div class="review-actions" id="review-actions"><button id="analyze" class="btn btn-primary" type="button" disabled>Analyze game</button><div class="analysis-progress" id="analysis-progress" hidden><p id="analysis-status" aria-live="polite"></p><progress id="analysis-meter" aria-label="Game analysis progress" hidden></progress></div><button id="start-retry" class="btn btn-secondary" type="button" disabled hidden>Retry this move</button></div></section>
+      <section id="key-moments-panel" aria-label="Key moments" hidden><div class="moment-heading"><h2>Key moments</h2><button id="next-moment" class="btn btn-secondary" type="button" disabled>Next key moment</button></div><div id="key-moments" class="moment-list"></div></section>
       <section id="retry-panel" class="retry-panel" aria-label="Retry decision" hidden><h2 id="retry-title">Retry this decision</h2><p id="retry-instruction"></p><p id="retry-feedback" class="retry-feedback" aria-live="polite" hidden></p><p id="retry-answer" class="checked-answer" hidden></p><div class="retry-actions"><button id="retry-hint" class="btn btn-secondary" type="button" disabled>Hint</button><button id="end-retry" class="btn btn-secondary" type="button" disabled>Back to review</button></div></section>
       <p id="error" role="alert" hidden></p>
     </aside>
   </div>
-  <footer class="secondary-tools"><details id="variation-panel"><summary id="keyboard-toggle">Keyboard moves</summary><div class="drawer drawer-content"><form id="variation-form"><label class="form-label" for="variation">Moves from this position</label><div class="variation-input"><input class="form-control" id="variation" autocomplete="off" aria-label="Variation moves in SAN or from-to notation" placeholder="Nf3 Nc6 or g1f3 b8c6"/><button id="show-variation" class="btn btn-secondary" type="submit" disabled>Show</button></div></form><form id="retry-form" hidden><label class="form-label" for="retry-move">Your move</label><div class="variation-input"><input id="retry-move" class="form-control" autocomplete="off" spellcheck="false" aria-describedby="retry-format" placeholder="Nf3 or g1f3"/><button id="submit-retry" class="btn btn-primary" type="submit" disabled>Check move</button></div><span id="retry-format" class="sr-only">Use chess notation, such as Nf3, or from-to notation, such as g1f3.</span><details class="retry-record"><summary>Attempt record</summary><p id="retry-history" class="muted"></p></details></form><details id="position-details" class="position-details"><summary>Piece locations</summary><p id="accessible-position"></p></details></div></details><details id="learning-panel" class="learning-panel"><summary id="learning-title">History</summary><div class="drawer drawer-content"><div id="saved-mistakes" class="moment-list"></div><p id="progress" class="muted"></p></div></details></footer>
+  <footer class="secondary-tools"><details id="moves-panel"><summary id="moves-toggle">Moves</summary><div class="drawer drawer-content"><h2>Played moves</h2><div id="move-list" class="move-list" aria-label="Played moves"></div></div></details><details id="variation-panel"><summary id="keyboard-toggle">Keyboard moves</summary><div class="drawer drawer-content"><form id="variation-form"><label class="form-label" for="variation">Moves from this position</label><div class="variation-input"><input class="form-control" id="variation" autocomplete="off" aria-label="Variation moves in SAN or from-to notation" placeholder="Nf3 Nc6 or g1f3 b8c6"/><button id="show-variation" class="btn btn-secondary" type="submit" disabled>Show</button></div></form><form id="retry-form" hidden><label class="form-label" for="retry-move">Your move</label><div class="variation-input"><input id="retry-move" class="form-control" autocomplete="off" spellcheck="false" aria-describedby="retry-format" placeholder="Nf3 or g1f3"/><button id="submit-retry" class="btn btn-primary" type="submit" disabled>Check move</button></div><span id="retry-format" class="sr-only">Use chess notation, such as Nf3, or from-to notation, such as g1f3.</span><details class="retry-record"><summary>Attempt record</summary><p id="retry-history" class="muted"></p></details></form><details id="position-details" class="position-details"><summary>Piece locations</summary><p id="accessible-position"></p></details></div></details><details id="learning-panel" class="learning-panel"><summary id="learning-title">History</summary><div class="drawer drawer-content"><div id="saved-mistakes" class="moment-list"></div><p id="progress" class="muted"></p></div></details></footer>
   <p id="summary" class="sr-only"></p><p id="side" class="sr-only"></p><p id="status" class="sr-only" aria-live="polite">Connecting to native chat…</p>
   <p id="drawer-error" class="drawer-error" role="alert" hidden></p>
 </main>`;
 const el = id => document.getElementById(id);
-for (const id of ['previous', 'next', 'return', 'show-variation', 'analyze', 'start-retry', 'submit-retry', 'retry-hint', 'end-retry', 'refresh-games', 'game']) el(id).disabled = true;
+for (const id of ['previous', 'next', 'return', 'show-variation', 'analyze', 'start-retry', 'submit-retry', 'retry-hint', 'end-retry', 'refresh-games', 'game', 'start-review', 'show-better', 'resume-played', 'coach-return', 'explain-move', 'next-moment']) el(id).disabled = true;
 
 function reportError(error) {
   el('error').hidden = false;
@@ -78,12 +89,12 @@ function reportError(error) {
 function clearError() { el('error').hidden = true; el('error').textContent = ''; el('drawer-error').hidden = true; el('drawer-error').textContent = ''; }
 function setGamePicker(open) {
   el('game-picker').hidden = !open; el('game-picker-title').setAttribute('aria-expanded', String(Boolean(open)));
-  if (open) { el('variation-panel').open = false; el('learning-panel').open = false; activeDrawer = 'game-picker-title'; }
+  if (open) { el('variation-panel').open = false; el('learning-panel').open = false; el('moves-panel').open = false; activeDrawer = 'game-picker-title'; }
   else if (activeDrawer === 'game-picker-title') activeDrawer = undefined;
   el('workspace-content').inert = Boolean(activeDrawer);
   if (state) render(state, { publish: false });
 }
-function closeDrawers() { const focus = activeDrawer; activeDrawer = undefined; el('variation-panel').open = false; el('learning-panel').open = false; el('drawer-error').hidden = true; setGamePicker(false); if (focus) el(focus).focus(); }
+function closeDrawers() { const focus = activeDrawer; activeDrawer = undefined; el('variation-panel').open = false; el('learning-panel').open = false; el('moves-panel').open = false; el('drawer-error').hidden = true; setGamePicker(false); if (focus) el(focus).focus(); }
 
 function applyHostContext(context) {
   if (context?.theme) applyDocumentTheme(context.theme);
@@ -102,6 +113,7 @@ function unpack(result) {
 function redrawStatus() {
   if (!state) return;
   const contextStatus = contextRevision === state.revision ? 'context accepted' : extensions.modelContext ? 'publishing context' : 'context unavailable';
+  if (state) renderGuidedReview();
   el('status').textContent = contextRevision === state.revision ? 'Selected position connected to chat.' : contextStatus === 'context unavailable' ? 'Position context unavailable. Reopen the board to reconnect.' : 'Connecting selected position to chat…';
 }
 
@@ -272,6 +284,96 @@ function renderReviewControls() {
   renderRetry(retry);
   renderLearning(hidden);
   renderEngineGuide();
+  renderGuidedReview();
+}
+
+function assessedMoves() { return !retryHidden() && readyAnalysis() ? state.analysis.moveAssessments || [] : []; }
+function reviewMoments() { return !retryHidden() && readyAnalysis() ? (state.analysis.keyMoments || []).map(item => typeof item === 'number' ? { ply: item } : item).sort((a, b) => a.ply - b.ply) : []; }
+function renderGuidedReview() {
+  if (!state) return;
+  const hidden = retryHidden(), ready = readyAnalysis(), retry = Boolean(state.retry);
+  const busy = manualInFlight || !canonicalSynced || Boolean(pendingPromotion);
+  const overview = !hidden && !retry && ready && !reviewStarted && !state.variation?.length;
+  const selected = state.analysis?.selectedMove;
+  const moves = assessedMoves();
+  const comparison = comparisonAnchor && comparisonAnchor.gameId === state.gameId && comparisonAnchor.sessionId === state.sessionId && state.selectedPly === comparisonAnchor.ply - 1 && state.variation?.[0] === comparisonAnchor.firstMove;
+  if (comparisonAnchor && !comparison) comparisonAnchor = undefined;
+  el('review-overview').hidden = !overview;
+  el('coach-panel').hidden = hidden || !ready || retry || overview || reviewMode === 'engine';
+  el('engine-mode-panel').hidden = hidden || retry || overview || reviewMode !== 'engine';
+  el('review-modes').hidden = retry;
+  el('review-mode').setAttribute('aria-pressed', String(reviewMode === 'review'));
+  el('engine-mode').setAttribute('aria-pressed', String(reviewMode === 'engine'));
+  el('overview-toggle').disabled = busy || !ready || retry;
+  el('start-review').disabled = busy || !ready;
+  const own = state.playerColor === 'black' ? 'b' : 'w';
+  const counts = ['Best', 'Excellent', 'Good', 'Inaccuracy', 'Mistake', 'Blunder', ...['Brilliant', 'Great', 'Miss'].filter(label => moves.some(move => move.label === label))];
+  el('classification-counts').replaceChildren(...counts.map(label => {
+    const row = document.createElement('div'); row.className = 'count-row'; row.dataset.grade = label;
+    const name = document.createElement('span'); name.textContent = label;
+    const values = document.createElement('strong'); values.textContent = `${moves.filter(move => move.color === own && move.label === label).length} / ${moves.filter(move => move.color !== own && move.label === label).length}`;
+    values.setAttribute('aria-label', `${label}: ${moves.filter(move => move.color === own && move.label === label).length} yours, ${moves.filter(move => move.color !== own && move.label === label).length} opponent`);
+    row.append(name, values); return row;
+  }));
+  el('overview-summary').textContent = moves.length ? 'Move counts · yours / opponent' : 'Analysis is ready. Step through the game or jump to a key moment.';
+  const note = state.coachingNote;
+  const checkedNote = !hidden && ready && !retry && note?.sessionId === state.sessionId && note.gameId === state.gameId && note.revision === state.revision && note.fen === state.fen && typeof note.text === 'string';
+  el('coaching-note').hidden = !checkedNote;
+  el('coaching-note').textContent = checkedNote ? `AI coach: ${note.text}` : '';
+  el('coach-facts').hidden = checkedNote;
+  const branch = Boolean(state.variation?.length);
+  const grade = !hidden && ready && !branch ? selected?.classification?.label : undefined;
+  const loss = selected?.classification?.loss;
+  el('coach-title').textContent = comparison ? 'Compare the better move' : branch ? 'Exploring a continuation' : selected ? `${selected.color === own ? 'Your' : 'Opponent’s'} move` : 'Start your review';
+  el('coach-facts').textContent = hidden || !ready ? '' : comparison ? `The checked move replaces ${comparisonAnchor.san || 'the played move'}. Resume to compare the position you reached in the game.` : branch ? 'This is an explored line. The game’s accuracy stays unchanged.' : selected ? `${grade ? `${selected.san} was classified ${grade.toLowerCase()}.` : `${selected.san} is the played move.`}${Number.isFinite(loss) && loss > 0 ? ` It lost ${loss.toFixed(1)} percentage points of modeled winning chances from the position before the move.` : ''}` : 'Start with the first move, or jump straight to a key moment.';
+  const better = !hidden && ready && !retry && !branch && selected && Number.isInteger(selected.ply) && selected.ply > 0 && ['Inaccuracy', 'Mistake', 'Blunder', 'Miss'].includes(grade);
+  el('show-better').hidden = !better; el('show-better').disabled = busy || !better;
+  el('resume-played').hidden = !comparison; el('resume-played').disabled = busy || !comparison;
+  el('coach-return').hidden = hidden || retry || !branch || Boolean(comparison);
+  el('coach-return').disabled = busy || el('coach-return').hidden;
+  const canExplain = !hidden && ready && !retry && (selected || branch) && canonicalSynced;
+  el('explain-move').hidden = !canExplain;
+  el('explain-move').disabled = busy || !canExplain || explainInFlight || contextRevision !== state.revision;
+  el('explain-move').textContent = explainInFlight ? 'Sending…' : 'Explain this move';
+  if (hidden || lastExplained !== evidenceKey()) { el('coach-message').hidden = true; el('coach-message').textContent = ''; }
+  el('evaluation-chart').hidden = hidden || retry || !ready || !moves.length;
+  el('evaluation-graph').replaceChildren(...moves.map(move => {
+    const score = Number.isFinite(move.mate) ? move.mate > 0 ? 8 : move.mate < 0 ? -8 : 0 : Number.isFinite(move.cp) ? Math.max(-8, Math.min(8, move.cp / 100)) : 0;
+    const button = momentButton('', () => { reviewStarted = true; void mutate('go_to_move', { ply: move.ply }); }, busy);
+    button.className = 'evaluation-point'; button.setAttribute('style', `--advantage:${score};`);
+    button.setAttribute('aria-label', `${moveLabel(move.ply, move.san)} · ${move.label || ''} · ${Number.isFinite(move.mate) ? `mate ${move.mate}` : Number.isFinite(move.cp) ? `White ${(move.cp / 100).toFixed(2)}` : 'Evaluation unavailable'}`);
+    button.setAttribute('aria-current', String(!branch && move.ply === state.selectedPly));
+    return button;
+  }));
+  el('moves-panel').hidden = hidden || retry;
+  el('move-list').replaceChildren(...(!hidden && !retry ? (state.playedMoves || []).map((san, index) => {
+    const assessment = moves.find(move => move.ply === index + 1);
+    const button = momentButton(`${moveLabel(index + 1, san)}${assessment?.label ? ` · ${assessment.label}` : ''}`, () => { reviewStarted = true; void mutate('go_to_move', { ply: index + 1 }); }, busy);
+    button.dataset.grade = assessment?.label || ''; button.setAttribute('aria-current', String(!branch && state.selectedPly === index + 1)); return button;
+  }) : []));
+  const moments = reviewMoments();
+  el('next-moment').disabled = busy || retry || !moments.length;
+  el('next-moment').textContent = moments.some(move => move.ply > state.selectedPly) ? 'Next key moment' : 'First key moment';
+}
+
+async function explainMove() {
+  if (!state || explainInFlight || manualInFlight || !canonicalSynced || retryHidden() || state.retry || !readyAnalysis()) return;
+  const snapshot = { sessionId: state.sessionId, revision: state.revision, gameId: state.gameId, selectedPly: state.selectedPly, fen: state.fen, variation: [...(state.variation || [])] };
+  const identity = JSON.stringify(snapshot);
+  explainInFlight = true; clearError(); renderGuidedReview();
+  try {
+    const nativeMessage = extensions.message;
+    const sendMessage = nativeMessage?.send ? nativeMessage.send.bind(nativeMessage) : app.getHostCapabilities?.()?.message?.text && typeof app.sendMessage === 'function' ? app.sendMessage.bind(app) : undefined;
+    if (!sendMessage) throw new Error('This host cannot send coaching requests from the board. Ask “explain this move” in the native chat, or reopen the board in a supported Codex host.');
+    queueContext(state); await publishContext();
+    const current = { sessionId: state.sessionId, revision: state.revision, gameId: state.gameId, selectedPly: state.selectedPly, fen: state.fen, variation: [...(state.variation || [])] };
+    if (JSON.stringify(current) !== identity || retryHidden() || state.retry || !canonicalSynced) throw new Error('The position changed. Choose Explain this move again.');
+    if (contextRevision !== snapshot.revision) throw new Error('The selected position is still connecting to chat. Try Explain this move again when connected.');
+    const result = await sendMessage({ role: 'user', ...(nativeMessage ? { _meta: { 'openai/message': { target: 'active', send: true } } } : {}), content: [{ type: 'text', text: `Explain this chess review move in plain language. Selected state: ${JSON.stringify(snapshot)}. Read get_review_context for this explicit session and require revision ${snapshot.revision} and FEN ${snapshot.fen} before explaining; if it changed, stop and ask me to select the move again. Use checked position evidence and legal lines. Explain the move classification and one concrete better idea only when supported by checked evidence. Do not invent engine facts, change the board, start a retry, or change game scores. Then call publish_coaching_note with sessionId and expectedRevision from this selected state, and a short plain-language text (one idea plus one concrete cue; at most 280 characters) so I can see it on the board. If revision or FEN changed, do not publish a note for a different position. Keep the chat explanation short and useful.` }] }, { timeout: 10000 });
+    if (result?.isError) throw new Error('The host rejected the coaching request. Ask “explain this move” in the native chat.');
+    if (state.sessionId === snapshot.sessionId && state.revision === snapshot.revision && !retryHidden()) { lastExplained = evidenceKey(); el('coach-message').textContent = 'Explanation requested in chat.'; el('coach-message').hidden = false; }
+  } catch (error) { reportError(error); }
+  finally { explainInFlight = false; if (state) renderGuidedReview(); }
 }
 
 function renderRetry(retry) {
@@ -418,6 +520,8 @@ function render(next, { publish = true } = {}) {
   const boardPosition = value => JSON.stringify({ gameId: value.gameId, selectedPly: value.selectedPly, fen: value.fen, variation: value.variation || [], retryId: value.retry?.retryId });
   if (state && boardPosition(state) !== boardPosition(next)) ground?.cancelMove?.();
   if (pendingPromotion && (next.sessionId !== pendingPromotion.sessionId || next.revision !== pendingPromotion.revision)) pendingPromotion = undefined;
+  if (state && state.gameId !== next.gameId) { reviewStarted = false; reviewMode = 'review'; comparisonAnchor = undefined; }
+  if (next.selectedPly > 0 || next.variation?.length || next.retry) reviewStarted = true;
   state = next;
   if (retryHidden()) { positionEvidence = undefined; evidencePending = undefined; evidenceAttempted = undefined; evidenceError = undefined; evidenceRequest++; }
   const cells = fenBoard(state.fen);
@@ -521,7 +625,7 @@ async function sync() {
       canonicalSynced = true;
       render(state, { publish: false });
       queueContext(state);
-    } else if (response.state && (response.changed || response.state.revision > state.revision)) render(response.state);
+    } else if (response.state && (response.changed || response.state.revision > state.revision || JSON.stringify(response.state.coachingNote) !== JSON.stringify(state.coachingNote))) render(response.state);
     await publishContext();
     pollDelay = 1500;
   } catch (error) {
@@ -565,18 +669,34 @@ async function mutate(name, args = {}) {
 
 el('previous').addEventListener('click', () => { if (state) void (state.variation?.length ? state.variation.length === 1 ? mutate('return_to_game') : mutate('show_variation', { moves: state.variation.slice(0, -1) }) : mutate('go_to_move', { ply: Math.max(0, state.selectedPly - 1) })); });
 el('next').addEventListener('click', () => { if (state) void mutate('go_to_move', { ply: state.selectedPly + 1 }); });
-el('return').addEventListener('click', () => void mutate('return_to_game'));
+el('return').addEventListener('click', () => { const ply = comparisonAnchor?.ply; comparisonAnchor = undefined; void (ply ? mutate('go_to_move', { ply }) : mutate('return_to_game')); });
 el('import-form').addEventListener('submit', event => { event.preventDefault(); void loadCatalog({ refresh: true, selectImported: true }); });
 el('game-picker-title').addEventListener('click', () => setGamePicker(el('game-picker').hidden));
-for (const [id, focus] of [['variation-panel', 'keyboard-toggle'], ['learning-panel', 'learning-title']]) {
+for (const [id, focus] of [['variation-panel', 'keyboard-toggle'], ['learning-panel', 'learning-title'], ['moves-panel', 'moves-toggle']]) {
   el(id).addEventListener('toggle', () => {
-    if (el(id).open) { setGamePicker(false); el(id === 'variation-panel' ? 'learning-panel' : 'variation-panel').open = false; activeDrawer = focus; }
+    if (el(id).open) { setGamePicker(false); for (const other of ['variation-panel', 'learning-panel', 'moves-panel']) if (other !== id) el(other).open = false; activeDrawer = focus; }
     else if (activeDrawer === focus) activeDrawer = undefined;
     el('workspace-content').inert = Boolean(activeDrawer);
     if (state) render(state, { publish: false });
   });
 }
 el('game').addEventListener('change', () => { if (state && el('game').value && el('game').value !== state.gameId) void mutate('select_game', { gameId: el('game').value }).then(committed => { if (committed) { setGamePicker(false); el('game-picker-title').focus(); } }); });
+el('review-mode').addEventListener('click', () => { if (!state) return; reviewMode = 'review'; render(state, { publish: false }); });
+el('engine-mode').addEventListener('click', () => { if (!state) return; reviewMode = 'engine'; reviewStarted = true; render(state, { publish: false }); });
+el('overview-toggle').addEventListener('click', () => { if (state && readyAnalysis() && !state.retry) void mutate('go_to_move', { ply: 0 }).then(committed => { if (committed) { reviewStarted = false; reviewMode = 'review'; render(state, { publish: false }); } }); });
+el('start-review').addEventListener('click', () => { reviewStarted = true; reviewMode = 'review'; void mutate('go_to_move', { ply: 1 }); });
+el('next-moment').addEventListener('click', () => { const moments = reviewMoments(); const moment = moments.find(move => move.ply > state.selectedPly) || moments[0]; if (moment) { reviewStarted = true; void mutate('go_to_move', { ply: moment.ply }); } });
+el('show-better').addEventListener('click', () => {
+  const selected = state?.analysis?.selectedMove;
+  if (!selected || retryHidden() || state.retry || state.variation?.length || !readyAnalysis()) return;
+  const anchor = { sessionId: state.sessionId, gameId: state.gameId, ply: selected.ply, san: selected.san };
+  void mutate('show_best_move', { ply: selected.ply }).then(committed => {
+    if (committed && committed.gameId === anchor.gameId && committed.selectedPly === anchor.ply - 1 && committed.variation?.length) { comparisonAnchor = { ...anchor, firstMove: committed.variation[0] }; render(state, { publish: false }); }
+  });
+});
+el('resume-played').addEventListener('click', () => { const ply = comparisonAnchor?.ply; comparisonAnchor = undefined; if (ply) void mutate('go_to_move', { ply }); });
+el('coach-return').addEventListener('click', () => { if (state?.variation?.length && !state.retry) void mutate('return_to_game'); });
+el('explain-move').addEventListener('click', () => void explainMove());
 el('engine-toggle').addEventListener('click', () => { engineEnabled = !engineEnabled; if (state) render(state, { publish: false }); });
 el('engine-play').addEventListener('click', () => { const move = checkedGuide()?.line[0]?.uci; if (move && !state.retry) void mutate('show_variation', { moves: [...(state.variation || []), move] }); });
 el('analyze').addEventListener('click', () => void mutate('analyze_game'));
