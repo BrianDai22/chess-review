@@ -476,7 +476,7 @@ test('hidden retry board move submits explicit session and attempt guards', asyn
   assert.match(h.nodes.get('retry-feedback').textContent, /accepted as a sound move/);
 });
 
-const promotionPosition = { ...initial, fen: '7k/P7/8/8/8/8/8/7K w - - 0 1',
+const promotionPosition = { ...initial, initialFen: '7k/P7/8/8/8/8/8/7K w - - 0 1', fen: '7k/P7/8/8/8/8/8/7K w - - 0 1',
   legalMoves: ['q', 'r', 'b', 'n'].map(promotion => ({ from: 'a7', to: 'a8', promotion })) };
 
 test('promotion requires an explicit accessible legal piece choice before submission', async () => {
@@ -560,7 +560,8 @@ test('checked legal engine guide draws a best move arrow and both players show c
   assert.equal(h.nodes.get('engine-status').textContent, 'Best: Nf3');
   assert.equal(h.boardConfigurations.at(-1).drawable.autoShapes[0].orig, 'g1');
   assert.equal(h.boardConfigurations.at(-1).drawable.autoShapes[0].dest, 'f3');
-  assert.equal(h.nodes.get('engine-line').children[0].textContent, 'Nf3');
+  assert.equal(h.nodes.get('engine-line').children[0].textContent, '');
+  assert.equal(h.nodes.get('engine-line').children[0].children[0].className, 'coach-piece white knight');
   h.nodes.get('engine-toggle').click();
   assert.equal(h.nodes.get('engine-play').hidden, true);
   assert.equal(h.nodes.get('engine-line').children.length, 0);
@@ -606,7 +607,7 @@ test('variation guide fetches explicit checked evidence and plays the next move 
 
 test('late variation evidence cannot expose an answer after entering a hidden retry', async () => {
   const evidence = deferred();
-  const h = harness({ initialState: { ...guided, variation: ['e4'], analysis: { ...guided.analysis, currentPosition: null } }, toolResponses: {
+  const h = harness({ initialState: { ...guided, selectedPly: 0, variation: ['e4'], analysis: { ...guided.analysis, currentPosition: null } }, toolResponses: {
     get_position_evidence: () => evidence.promise,
     start_retry: (call, canonical) => ({ ...canonical, revision: 2, variation: [], retry: hiddenRetry }),
   } }); await settle();
@@ -815,10 +816,11 @@ test('Explain sends a concise visible trigger with explicit guarded request in a
   assert.equal(h.messageCalls.length, 1);
   assert.equal(h.messageCalls[0].role, 'user');
   const prompt = h.messageCalls[0].content[0].text;
-  assert.equal(prompt,'Explain this move and show the key idea on my review board.');
+  assert.equal(prompt,'Explain this move visually on my review board, with arrows and playable steps.');
   const context=h.contextCalls.at(-1),request=context.structuredContent.coachingRequest;
   assert.equal(request.sessionId,'review-one');assert.equal(request.revision,1);assert.equal(request.fen,guided.fen);
-  assert.match(context.content[0].text,/Do not invent engine facts, change the board/);
+  assert.match(context.content[0].text,/publish_coaching_visual/);
+  assert.match(context.content[0].text,/No chess notation/);
   assert.equal(h.toolCalls.some(call => ['go_to_move', 'show_variation', 'show_best_move'].includes(call.name)), false);
   assert.equal(h.nodes.get('coach-message').textContent, 'Explanation requested in chat.');
 });
@@ -892,12 +894,12 @@ test('experimental OpenAI message capability supports coaching through the exist
   assert.equal(message.role, 'user');
   assert.equal(message._meta['openai/message'].target, 'active');
   assert.equal(message._meta['openai/message'].send, true);
-  assert.equal(message.content[0].text,'Explain this move and show the key idea on my review board.');
+  assert.equal(message.content[0].text,'Explain this move visually on my review board, with arrows and playable steps.');
   assert.equal(h.nodes.get('error').hidden, true);
 });
 
 test('manual branch has a directly accessible Return to game in guided review', async () => {
-  const branch = { ...guided, variation: ['e4'], fen: afterE4, sideToMove: 'black', analysis: { ...guided.analysis, currentPosition: null } };
+  const branch = { ...guided, selectedPly: 0, variation: ['e4'], fen: afterE4, sideToMove: 'black', analysis: { ...guided.analysis, currentPosition: null } };
   const h = harness({ initialState: branch, toolResponses: { return_to_game: (call, canonical) => ({ ...guided, revision: canonical.revision + 1, variation: [] }) } }); await settle();
   assert.equal(h.nodes.get('engine-mode-panel').hidden, true);
   assert.equal(h.nodes.get('coach-return').hidden, false);
@@ -937,7 +939,7 @@ test('unchanged review graph, move list and branch trail retain focused DOM node
   assert.equal(h.nodes.get('move-list').children[1], move);
   assert.equal(h.nodes.get('classification-counts').children[0], count);
   assert.equal(move.focusCount, 1); assert.equal(h.nodes.get('move-list').scrollTop, 120);
-  const branch = harness({ initialState: { ...guided, variation: ['e4'], moveHistory: ['e4'], fen: afterE4, analysis: { ...guided.analysis, currentPosition: null } } }); await settle();
+  const branch = harness({ initialState: { ...guided, selectedPly: 0, variation: ['e4'], moveHistory: ['e4'], fen: afterE4, analysis: { ...guided.analysis, currentPosition: null } } }); await settle();
   const trail = branch.nodes.get('variation-trail').children[0];
   branch.nodes.get('engine-toggle').click(); await settle();
   assert.equal(branch.nodes.get('variation-trail').children[0], trail);
@@ -1073,4 +1075,102 @@ test('position change during Explain acknowledgment discards request and sends n
   h.coachingWait.resolve({updateId:'old-position-request'});await settle();
   assert.equal(h.messageCalls.length,0);assert.equal(h.contextCalls.at(-1).structuredContent.coachingRequest,undefined);
   assert.match(h.nodes.get('error').textContent,/position changed/);
+});
+
+function visualFixture() {
+  const chess = new Chess(afterE4), steps = [];
+  for (const [move,label] of [['e7e5','Claim the center'],['g1f3','Attack the pawn']]) {
+    const played = chess.move({from:move.slice(0,2),to:move.slice(2,4)});
+    steps.push({uci:move,san:played.san,fen:chess.fen(),piece:played.piece,color:played.color,from:played.from,to:played.to,label,focus:[played.to]});
+  }
+  const base = {...guided,selectedPly:1,fen:new Chess(afterE4).fen(),moveHistory:['e4'],variation:[],sideToMove:'black',legalMoves:new Chess(afterE4).moves({verbose:true}),analysis:{...guided.analysis,currentPosition:{ready:true,exact:true,fen:afterE4,bestMove:'e7e5',pv:['e7e5','g1f3']}}};
+  const note = {sessionId:base.sessionId,gameId:base.gameId,revision:base.revision,fen:base.fen,createdAt:1,text:'Develop with pressure',visual:{title:'Develop with pressure',steps}};
+  return {base,note};
+}
+
+test('visual coach plays checked steps through guarded backend commits, highlights pieces, and restores its anchor', async () => {
+  const {base,note} = visualFixture(), first = deferred();
+  const h = harness({initialState:{...base,coachingNote:note},toolResponses:{
+    show_variation:async(call,canonical)=>{
+      if (canonical.revision === 1) await first.promise;
+      const chess=new Chess(base.fen),sans=[];
+      for (const move of call.arguments.moves) sans.push(chess.move(/^[a-h][1-8][a-h][1-8]$/.test(move) ? {from:move.slice(0,2),to:move.slice(2,4)} : move).san);
+      return {...canonical,revision:canonical.revision+1,variation:sans,fen:chess.fen(),moveHistory:['e4',...sans],sideToMove:chess.turn()==='w'?'white':'black',legalMoves:chess.moves({verbose:true}),coachingNote:undefined};
+    }
+  }}); await settle();
+  assert.equal(h.getNode('visual-coach').hidden,false);
+  assert.equal(h.getNode('visual-title').textContent,'Develop with pressure');
+  assert.equal(h.getNode('explain-move').hidden,true);
+  assert.equal(h.getNode('visual-play').textContent,'Play');
+  assert.equal(h.getNode('position').textContent,'Move 1');
+  h.getNode('visual-play').click(); await settle();
+  assert.equal(h.board.config.fen,base.fen,'no speculative board while the commit is pending');
+  assert.equal(h.getNode('visual-play').disabled,true);
+  first.resolve(); await settle();
+  assert.equal(h.canonical.revision,2);
+  assert.equal(h.board.config.fen,note.visual.steps[0].fen);
+  assert.equal(h.getNode('visual-title').textContent,'Claim the center');
+  assert.equal(h.getNode('visual-play').textContent,'Next');
+  assert.deepEqual(Array.from(h.board.config.drawable.autoShapes,s=>({orig:s.orig,dest:s.dest,brush:s.brush})),[{orig:'e7',dest:'e5',brush:'green'},{orig:'e5',dest:undefined,brush:'yellow'}]);
+  h.getNode('visual-play').click(); await settle();
+  assert.equal(h.getNode('visual-play').textContent,'Replay');
+  assert.equal(h.getNode('visual-title').textContent,'Attack the pawn');
+  assert.equal(h.board.config.fen,note.visual.steps[1].fen);
+  h.getNode('visual-back').click(); await settle();
+  assert.equal(h.getNode('visual-title').textContent,'Claim the center');
+  h.getNode('visual-close').click(); await settle();
+  assert.equal(h.board.config.fen,base.fen);
+  assert.equal(h.getNode('visual-coach').hidden,true);
+  assert.deepEqual(h.canonical.variation,[]);
+  assert.equal(h.canonical.analysis.accuracy.w,base.analysis.accuracy.w);
+  assert.deepEqual(h.canonical.playedMoves,base.playedMoves);
+  assert.deepEqual(h.toolCalls.filter(c=>c.name==='show_variation').map(c=>c.arguments.expectedRevision),[1,2,3,4]);
+});
+
+test('external revision changes and hidden retries discard a visual lesson and reject stale publications', async () => {
+  const {base,note}=visualFixture(); let external=false;
+  const h=harness({initialState:{...base,coachingNote:note},toolResponses:{sync_review_view:()=>({changed:external,state:{...base,revision:external?2:1,coachingNote:note}})}}); await settle();
+  assert.equal(h.getNode('visual-coach').hidden,false);
+  external=true; await h.timerCallbacks.at(-1)(); await settle();
+  assert.equal(h.getNode('visual-coach').hidden,true);
+  const hidden=harness({initialState:{...base,coachingNote:note,retry:hiddenRetry}}); await settle();
+  assert.equal(hidden.getNode('visual-coach').hidden,true);
+  assert.equal(hidden.board.config.drawable.autoShapes.length,0);
+  const invalid=harness({initialState:{...base,coachingNote:{...note,visual:{...note.visual,steps:[{...note.visual.steps[0],fen:base.fen}]}}}}); await settle();
+  assert.equal(invalid.getNode('visual-coach').hidden,true);
+});
+
+
+test('failed visual Close keeps the lesson and checked board available for retry', async () => {
+  const {base,note}=visualFixture();
+  const h=harness({initialState:{...base,coachingNote:note},toolResponses:{show_variation:(call,canonical)=>{
+    if (!call.arguments.moves.length) throw new Error('Could not restore this position');
+    return {...canonical,revision:canonical.revision+1,variation:['e5'],fen:note.visual.steps[0].fen,coachingNote:undefined};
+  }}}); await settle();
+  h.getNode('visual-play').click(); await settle();
+  h.getNode('visual-close').click(); await settle();
+  assert.equal(h.getNode('visual-coach').hidden,false);
+  assert.equal(h.board.config.fen,note.visual.steps[0].fen);
+  assert.match(h.getNode('error').textContent,/Could not restore/);
+  assert.equal(h.getNode('visual-close').disabled,false);
+});
+
+
+test('visual playback accepts its checked commit delivered by polling before the tool response', async () => {
+  const {base,note}=visualFixture(),response=deferred(); let committed;
+  const h=harness({initialState:{...base,coachingNote:note},toolResponses:{
+    show_variation:async(call,canonical)=>{
+      committed={...canonical,revision:2,fen:note.visual.steps[0].fen,variation:['e5'],coachingNote:undefined};
+      await response.promise; return committed;
+    },
+    sync_review_view:(call,canonical)=>({state:committed || canonical,changed:Boolean(committed)})
+  }}); await settle();
+  h.getNode('visual-play').click(); await settle();
+  await h.timerCallbacks.at(-1)(); await settle();
+  assert.equal(h.getNode('visual-coach').hidden,false);
+  assert.equal(h.getNode('visual-title').textContent,'Claim the center');
+  assert.equal(h.board.config.fen,note.visual.steps[0].fen);
+  response.resolve(); await settle();
+  assert.equal(h.getNode('visual-play').textContent,'Next');
+  assert.equal(h.getNode('visual-close').disabled,false);
 });

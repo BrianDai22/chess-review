@@ -52,6 +52,9 @@ let reviewMode = 'review';
 let comparisonAnchor;
 let explainInFlight = false;
 let lastExplained;
+let visualLesson;
+let visualNavigation;
+let dismissedVisual;
 const guideExposures = new Set();
 
 document.body.innerHTML = `<main class="review" aria-label="Chess review">
@@ -65,15 +68,15 @@ document.body.innerHTML = `<main class="review" aria-label="Chess review">
       <fieldset id="promotion-panel" class="promotion-panel" hidden><legend>Choose promotion</legend><div id="promotion-choices" class="promotion-choices"></div><button id="cancel-promotion" class="btn btn-secondary" type="button">Cancel</button></fieldset>
       <div class="player-bar" id="player-bar"><span class="player-piece" id="player-piece" aria-hidden="true"></span><div class="player-identity"><strong id="player-name"></strong><span id="player-rating" class="muted"></span></div><span id="accuracy-assessment" class="player-score" hidden><span>Accuracy </span><strong id="accuracy"></strong></span><span id="player-turn" class="sr-only" hidden>To move</span></div>
       </div><nav class="move-navigation" aria-label="Played line navigation"><button id="previous" class="btn btn-secondary" type="button" aria-label="Previous move" disabled>Previous</button><span id="position" tabindex="-1" aria-live="polite">Start position</span><button id="next" class="btn btn-secondary" type="button" aria-label="Next move" disabled>Next</button></nav>
-      <p id="board-instruction" class="board-instruction">Move a piece to explore</p>
+      <p id="board-instruction" class="sr-only">Move a piece to explore</p>
     </section>
     <aside class="workbench" aria-label="Review tools">
       <nav id="review-modes" class="review-modes" aria-label="Review mode"><button id="review-mode" class="btn btn-secondary" aria-pressed="true" type="button">Review</button><button id="engine-mode" class="btn btn-secondary" aria-pressed="false" type="button">Engine</button><button id="overview-toggle" class="btn btn-secondary" type="button">Overview</button></nav>
       <section id="review-overview" class="review-overview" aria-label="Review overview" hidden><h2>Your game at a glance</h2><p id="overview-summary" class="muted"></p><div id="classification-counts" class="classification-counts"></div><button id="start-review" class="btn btn-primary" type="button" disabled>Start review</button></section>
-      <section id="coach-panel" class="coach-panel" aria-label="Move review"><h2 id="coach-title">Choose a move</h2><div class="assessment" id="assessment" hidden><div class="metric" id="move-assessment"><strong id="classification" class="classification"></strong></div><div class="metric" id="position-assessment"><strong id="evaluation"></strong></div></div><p id="coach-facts"></p><p id="coach-next-action" class="coach-next-action"></p><p id="coaching-note" class="coaching-note" aria-live="polite" hidden></p><div class="coach-actions"><button id="show-better" class="btn btn-primary" type="button" hidden disabled>Show better move</button><button id="resume-played" class="btn btn-primary" type="button" hidden disabled>Resume played move</button><button id="coach-return" class="btn btn-secondary" type="button" hidden disabled>Return to game</button><button id="explain-move" class="btn btn-secondary" type="button" disabled>Explain this move</button></div><p id="coach-message" class="muted" role="status" hidden></p></section>
-      <section id="evaluation-chart" class="evaluation-chart" aria-label="Game evaluation" hidden><div class="chart-heading"><span>White advantage</span><span>Black advantage</span></div><div id="evaluation-graph" class="evaluation-graph" aria-label="Select a move on the evaluation graph"></div></section>
+      <section id="coach-panel" class="coach-panel" aria-label="Move review"><h2 id="coach-title">Choose a move</h2><div class="assessment" id="assessment" hidden><div class="metric" id="move-assessment"><strong id="classification" class="classification"></strong></div><div class="metric" id="position-assessment"><strong id="evaluation"></strong></div></div><p id="coach-facts" class="sr-only"></p><p id="coach-next-action" class="sr-only"></p><p id="coaching-note" class="sr-only" hidden></p><section id="visual-coach" aria-label="Visual coaching" hidden><h3 id="visual-title"></h3><div id="visual-step-picture" class="visual-step-picture cg-wrap" aria-hidden="true"></div><p id="visual-label" class="sr-only" aria-live="polite"></p><div id="visual-steps" class="visual-steps" aria-label="Coaching steps"></div><nav class="visual-controls" aria-label="Visual coaching controls"><button id="visual-back" class="btn btn-secondary" type="button" aria-label="Previous coaching step" disabled>←</button><button id="visual-play" class="btn btn-primary" type="button" disabled>Play</button><button id="visual-close" class="btn btn-secondary" type="button" aria-label="Close coaching and restore position">×</button></nav></section><div class="coach-actions"><button id="show-better" class="btn btn-primary" type="button" hidden disabled>Show better move</button><button id="resume-played" class="btn btn-primary" type="button" hidden disabled>Resume played move</button><button id="coach-return" class="btn btn-secondary" type="button" hidden disabled>Return to game</button><button id="explain-move" class="btn btn-secondary" type="button" disabled>Explain this move</button></div><p id="coach-message" class="sr-only" role="status" hidden></p></section>
+      <section id="evaluation-chart" class="evaluation-chart" aria-label="Game evaluation" hidden><div class="chart-heading sr-only"><span>White advantage</span><span>Black advantage</span></div><div id="evaluation-graph" class="evaluation-graph" aria-label="Select a move on the evaluation graph"></div></section>
       <div id="engine-mode-panel" hidden>
-      <section id="engine-guide" class="engine-guide" aria-label="Engine guide"><div class="engine-actions"><button id="engine-toggle" class="btn btn-secondary" type="button" aria-pressed="true">Engine on</button><button id="engine-play" class="btn btn-primary" type="button" disabled>Play best move</button><button id="return" class="btn btn-secondary" type="button" disabled hidden>Return to game</button></div><p id="engine-status" class="muted" aria-live="polite"></p><div id="engine-line" class="line-trail" aria-label="Checked engine continuation"></div></section>
+      <section id="engine-guide" class="engine-guide" aria-label="Engine guide"><div class="engine-actions"><button id="engine-toggle" class="btn btn-secondary" type="button" aria-pressed="true">Engine on</button><button id="engine-play" class="btn btn-primary" type="button" disabled>Play best move</button><button id="return" class="btn btn-secondary" type="button" disabled hidden>Return to game</button></div><p id="engine-status" class="sr-only" aria-live="polite"></p><div id="engine-line" class="line-trail" aria-label="Checked engine continuation"></div></section>
       </div>
       <div id="variation-trail" class="line-trail" aria-label="Explored moves" hidden></div>
       <section class="review-results" aria-label="Game analysis"><div class="review-actions" id="review-actions"><button id="analyze" class="btn btn-primary" type="button" disabled>Analyze game</button><div class="analysis-progress" id="analysis-progress" hidden><p id="analysis-status" aria-live="polite"></p><progress id="analysis-meter" aria-label="Game analysis progress" hidden></progress></div><button id="start-retry" class="btn btn-secondary" type="button" disabled hidden>Retry this move</button></div></section>
@@ -87,7 +90,7 @@ document.body.innerHTML = `<main class="review" aria-label="Chess review">
   <p id="drawer-error" class="drawer-error" role="alert" hidden></p>
 </main>`;
 const el = id => document.getElementById(id);
-for (const id of ['previous', 'next', 'return', 'show-variation', 'analyze', 'start-retry', 'submit-retry', 'retry-hint', 'end-retry', 'refresh-games', 'game', 'start-review', 'show-better', 'resume-played', 'coach-return', 'explain-move', 'next-moment']) el(id).disabled = true;
+for (const id of ['previous', 'next', 'return', 'show-variation', 'analyze', 'start-retry', 'submit-retry', 'retry-hint', 'end-retry', 'refresh-games', 'game', 'start-review', 'show-better', 'resume-played', 'coach-return', 'explain-move', 'next-moment', 'visual-back', 'visual-play', 'visual-close']) el(id).disabled = true;
 
 function reportError(error) {
   el('error').hidden = false;
@@ -148,7 +151,7 @@ function checkedGuide() {
   if (evidence.bestMove && pv.length && evidence.bestMove !== pv[0]) return;
   try {
     const chess = new Chess(state.fen);
-    const line = pv.map(uci => { if (!/^[a-h][1-8][a-h][1-8][qrbn]?$/.test(uci)) throw new Error('Invalid engine move'); const move = chess.move({ from: uci.slice(0, 2), to: uci.slice(2, 4), promotion: uci[4] }); return { uci, san: move.san, fen: chess.fen() }; });
+    const line = pv.map(uci => { if (!/^[a-h][1-8][a-h][1-8][qrbn]?$/.test(uci)) throw new Error('Invalid engine move'); const move = chess.move({ from: uci.slice(0, 2), to: uci.slice(2, 4), promotion: uci[4] }); return { uci, san: move.san, fen: chess.fen(), piece: move.piece, color: move.color, from: move.from, to: move.to }; });
     const first = line[0];
     if (first && !state.legalMoves?.some(move => `${move.from}${move.to}${move.promotion || ''}` === first.uci)) return;
     return { evidence, line };
@@ -194,10 +197,94 @@ function renderEngineGuide() {
   el('engine-status').hidden = !el('engine-status').textContent;
   el('engine-line').hidden = !engineEnabled || !guide?.line.length || hidden;
   const line = !hidden && engineEnabled && guide ? guide.line.slice(0,8) : [];
-  retainChildren('engine-line',[state.fen,line],() => line.map((move,index) => momentButton(move.san,() => void mutate('show_variation',{moves:[...(state.variation || []),...line.slice(0,index+1).map(item=>item.uci)]}))),button=>{button.disabled=!boardCanMove() || Boolean(state.retry);});
+  retainChildren('engine-line',[state.fen,line],() => line.map((move,index) => pieceButton(move,index+1,() => void mutate('show_variation',{moves:[...(state.variation || []),...line.slice(0,index+1).map(item=>item.uci)]}))),button=>{button.disabled=!boardCanMove() || Boolean(state.retry);});
   const branch = !hidden && !state.retry ? state.variation || [] : [];
   el('variation-trail').hidden = !branch.length;
-  retainChildren('variation-trail',branch,() => branch.map((move,index) => momentButton(move,()=>void mutate('show_variation',{moves:branch.slice(0,index+1)}))),button=>{button.disabled=manualInFlight || !canonicalSynced || Boolean(pendingPromotion);});
+  retainChildren('variation-trail',[state.selectedPly,branch],() => {
+    try {
+      const chess = new Chess(state.initialFen);
+      for (const san of (state.playedMoves || []).slice(0,state.selectedPly)) chess.move(san);
+      return branch.map((san,index) => pieceButton(chess.move(san),index+1,()=>void mutate('show_variation',{moves:branch.slice(0,index+1)})));
+    } catch { return []; }
+  },button=>{button.disabled=manualInFlight || !canonicalSynced || Boolean(pendingPromotion);});
+}
+function pieceIcon(move) {
+  const piece = document.createElement('piece');
+  piece.className = `coach-piece ${move.color === 'b' ? 'black' : 'white'} ${pieceNames[move.piece] || 'pawn'}`;
+  piece.setAttribute('aria-hidden','true');
+  return piece;
+}
+function pieceButton(move,number,action) {
+  const button = momentButton('',action); button.className = 'moment cg-wrap piece-chip';
+  button.setAttribute('aria-label',`${move.color === 'b' ? 'Black' : 'White'} ${pieceNames[move.piece]} · step ${number}`);
+  button.append(pieceIcon(move)); return button;
+}
+function visualPosition(lesson,step) {
+  return {fen:step ? lesson.steps[step-1].fen : lesson.fen, variation:[...lesson.variation,...lesson.steps.slice(0,step).map(move=>move.san)]};
+}
+function updateVisualLesson() {
+  if (!canonicalSynced || state.retry || !readyAnalysis()) { visualLesson = undefined; return; }
+  if (visualLesson) {
+    if (visualNavigation?.lesson === visualLesson && state.sessionId === visualLesson.sessionId && state.gameId === visualLesson.gameId && state.selectedPly === visualLesson.selectedPly && state.revision === visualLesson.revision + 1 && state.fen === visualNavigation.fen && JSON.stringify(state.variation || []) === JSON.stringify(visualNavigation.variation)) {
+      visualLesson.step = visualNavigation.step;
+      visualLesson.revision = state.revision;
+    }
+    const expected = visualPosition(visualLesson,visualLesson.step);
+    if (state.sessionId !== visualLesson.sessionId || state.gameId !== visualLesson.gameId || state.revision !== visualLesson.revision || state.selectedPly !== visualLesson.selectedPly || state.fen !== expected.fen || JSON.stringify(state.variation || []) !== JSON.stringify(expected.variation)) visualLesson = undefined;
+  }
+  const note = state.coachingNote;
+  if (!note?.visual || note.sessionId !== state.sessionId || note.gameId !== state.gameId || note.revision !== state.revision || note.fen !== state.fen) return;
+  const id = `${note.sessionId}:${note.revision}:${note.createdAt}`;
+  if (id === dismissedVisual || visualLesson?.id === id) return;
+  try {
+    const chess = new Chess(state.fen), steps = note.visual.steps;
+    if (!Array.isArray(steps) || !steps.length || steps.length > 4) return;
+    for (const step of steps) {
+      if (!/^[a-h][1-8][a-h][1-8][qrbn]?$/.test(step.uci)) return;
+      const move = chess.move({from:step.uci.slice(0,2),to:step.uci.slice(2,4),promotion:step.uci[4]});
+      if (chess.fen() !== step.fen || move.san !== step.san) return;
+    }
+    visualLesson = {id, sessionId:state.sessionId,gameId:state.gameId,revision:state.revision,selectedPly:state.selectedPly,fen:state.fen,variation:[...(state.variation || [])],title:note.visual.title,steps,step:0,source:'AI coach'};
+  } catch { /* Ignore malformed derived lessons; never render an unchecked position. */ }
+}
+function startEngineLesson() {
+  const line = checkedGuide()?.line.slice(0,4);
+  if (!line?.length) return;
+  visualLesson = {id:`engine:${evidenceKey()}`,sessionId:state.sessionId,gameId:state.gameId,revision:state.revision,selectedPly:state.selectedPly,fen:state.fen,variation:[...(state.variation || [])],title:'Checked continuation',steps:line.map(move=>({...move,label:`${move.color === 'b' ? 'Black' : 'White'} ${pieceNames[move.piece]}`,focus:[]})),step:0,source:'Engine line'};
+  render(state,{publish:false});
+}
+function renderVisualCoach() {
+  const lesson = !retryHidden() && !state.retry && readyAnalysis() ? visualLesson : undefined;
+  el('visual-coach').hidden = !lesson;
+  if (!lesson) return;
+  el('coach-title').textContent = lesson.source;
+  el('assessment').hidden = true;
+  el('explain-move').hidden = true;
+  for (const id of ['show-better','resume-played','coach-return']) el(id).hidden = true;
+  const current = lesson.steps[Math.max(0,lesson.step-1)];
+  el('visual-title').textContent = lesson.step ? current.label : lesson.title;
+  el('visual-label').textContent = `Step ${lesson.step} of ${lesson.steps.length}. ${el('visual-title').textContent}`;
+  const pictured = current;
+  retainChildren('visual-step-picture',[pictured.uci,lesson.step],()=>{
+    const arrow = document.createElement('span'); arrow.textContent = lesson.step === lesson.steps.length ? '✓' : '→';
+    const target = document.createElement('span'); target.className = `visual-target${(pictured.to.charCodeAt(0)+Number(pictured.to[1]))%2===0 ? ' dark' : ''}`; target.append(pieceIcon(pictured));
+    return [pieceIcon(pictured),arrow,target];
+  });
+  retainChildren('visual-steps',[lesson.id,lesson.steps.length],()=>Array.from({length:lesson.steps.length+1},(_,index)=>{
+    const button = momentButton(String(index),()=>void moveVisualStep(index)); button.className='step-dot'; button.setAttribute('aria-label',index ? `Coaching step ${index}: ${lesson.steps[index-1].label}` : 'Start of coaching'); return button;
+  }), (button,index)=>{button.disabled=!canonicalSynced || manualInFlight || Boolean(pendingPromotion) || Boolean(activeDrawer); button.setAttribute('aria-current',String(index===lesson.step));});
+  el('visual-back').disabled = manualInFlight || !canonicalSynced || Boolean(pendingPromotion) || Boolean(activeDrawer) || lesson.step === 0;
+  el('visual-play').disabled = manualInFlight || !canonicalSynced || Boolean(pendingPromotion) || Boolean(activeDrawer);
+  el('visual-close').disabled = el('visual-play').disabled;
+  el('visual-play').textContent = lesson.step === lesson.steps.length ? 'Replay' : lesson.step ? 'Next' : 'Play';
+}
+async function moveVisualStep(step) {
+  const lesson = visualLesson;
+  if (!lesson || manualInFlight || !canonicalSynced || state.retry || pendingPromotion || activeDrawer || step < 0 || step > lesson.steps.length) return;
+  const expected = visualPosition(lesson,step);
+  visualNavigation = {lesson,step,...expected};
+  try { return await mutate('show_variation',{moves:[...lesson.variation,...lesson.steps.slice(0,step).map(move=>move.uci)]}); }
+  finally { visualNavigation = undefined; }
 }
 function evalLabel(evidence) {
   if (!evidence?.ready || !evidence.exact || evidence.bound) return '';
@@ -254,7 +341,7 @@ function renderGameIdentity() {
   el('game-title').textContent = fixture ? 'Sample game' : timeClass ? `${timeClass[0].toUpperCase()}${timeClass.slice(1)}${control ? ` · ${control}` : ''}` : 'Game review';
   const date = selectedGame?.endTime > 0 ? new Intl.DateTimeFormat(undefined, { month: 'short', day: 'numeric', year: 'numeric' }).format(selectedGame.endTime * 1000) : '';
   el('game-meta').textContent = date;
-  el('game-meta').hidden = !date;
+  el('game-meta').hidden = true;
   el('game-source').textContent = fixture ? state.sourceLabel || selectedGame.sourceLabel || 'Verification fixture' : '';
   el('game-source').title = el('game-source').textContent;
   el('game-source').hidden = !fixture;
@@ -305,7 +392,7 @@ function renderReviewControls() {
   el('key-moments-panel').hidden = !moments.length || Boolean(retry);
   retainChildren('key-moments',moments,()=>moments.map(moment => {
     const ply = typeof moment === 'number' ? moment : moment.ply;
-    const button = momentButton(`${moveLabel(ply, moment.san || '')}${moment.label ? ` · ${moment.label}` : ''}`, () => void mutate('go_to_move', { ply }), busy);
+    const button = momentButton(`Move ${Math.ceil(ply / 2)}${moment.label ? ` · ${moment.label}` : ''}`, () => void mutate('go_to_move', { ply }), busy);
     button.dataset.grade = moment.label || '';
     button.setAttribute('aria-current', ply === state.selectedPly ? 'true' : 'false');
     return button;
@@ -344,7 +431,8 @@ function renderGuidedReview() {
     values.setAttribute('aria-label', `${label}: ${moves.filter(move => move.color === own && move.label === label).length} yours, ${moves.filter(move => move.color !== own && move.label === label).length} opponent`);
     row.append(name, values); return row;
   }));
-  el('overview-summary').textContent = moves.length ? 'Move counts · yours / opponent' : 'Analysis is ready. Step through the game or jump to a key moment.';
+  el('overview-summary').textContent = '';
+  el('overview-summary').hidden = true;
   const note = state.coachingNote;
   const checkedNote = !hidden && ready && !retry && note?.sessionId === state.sessionId && note.gameId === state.gameId && note.revision === state.revision && note.fen === state.fen && typeof note.text === 'string';
   el('coaching-note').hidden = !checkedNote;
@@ -367,7 +455,8 @@ function renderGuidedReview() {
   const canExplain = !hidden && ready && !retry && (selected || branch) && canonicalSynced;
   el('explain-move').hidden = !canExplain;
   el('explain-move').disabled = busy || !canExplain || explainInFlight || contextRevision !== state.revision;
-  el('explain-move').textContent = explainInFlight ? 'Sending…' : 'Explain this move';
+  el('explain-move').textContent = explainInFlight ? 'Thinking…' : 'Explain visually';
+  renderVisualCoach();
   if (hidden || lastExplained !== evidenceKey()) { el('coach-message').hidden = true; el('coach-message').textContent = ''; }
   el('evaluation-chart').hidden = hidden || retry || !ready || !moves.length;
   retainChildren('evaluation-graph',moves,()=>moves.map(move => {
@@ -406,9 +495,9 @@ async function explainMove() {
     const current = { sessionId: state.sessionId, revision: state.revision, gameId: state.gameId, selectedPly: state.selectedPly, fen: state.fen, variation: [...(state.variation || [])] };
     if (JSON.stringify(current) !== identity || retryHidden() || state.retry || !canonicalSynced) throw new Error('The position changed. Choose Explain this move again.');
     if (contextRevision !== snapshot.revision || acknowledgedCoachingRequest!==request.requestId) throw new Error('The selected position is still connecting to chat. Try Explain this move again when connected.');
-    const result = await sendMessage({ role: 'user', ...(nativeMessage ? { _meta: { 'openai/message': { target: 'active', send: true } } } : {}), content: [{ type: 'text', text: 'Explain this move and show the key idea on my review board.' }] }, { timeout: 10000 });
+    const result = await sendMessage({ role: 'user', ...(nativeMessage ? { _meta: { 'openai/message': { target: 'active', send: true } } } : {}), content: [{ type: 'text', text: 'Explain this move visually on my review board, with arrows and playable steps.' }] }, { timeout: 10000 });
     if (result?.isError) throw new Error('The host rejected the coaching request. Ask “explain this move” in the native chat.');
-    if (state.sessionId === snapshot.sessionId && state.revision === snapshot.revision && !retryHidden()) { lastExplained = evidenceKey(); el('coach-message').textContent = 'Explanation requested in chat.'; el('coach-message').hidden = false; }
+    if (state.sessionId === snapshot.sessionId && state.revision === snapshot.revision && !retryHidden()) { lastExplained = evidenceKey(); if (!visualLesson) startEngineLesson(); el('coach-message').textContent = 'Explanation requested in chat.'; el('coach-message').hidden = false; }
   } catch (error) { reportError(error); }
   finally { explainInFlight = false; if (state) renderGuidedReview(); }
 }
@@ -562,6 +651,7 @@ function render(next, { publish = true } = {}) {
   if (state && state.gameId !== next.gameId) { reviewStarted = false; reviewMode = 'review'; comparisonAnchor = undefined; }
   if (next.selectedPly > 0 || next.variation?.length || next.retry) reviewStarted = true;
   state = next;
+  updateVisualLesson();
   if (retryHidden()) { positionEvidence = undefined; evidencePending = undefined; evidenceAttempted = undefined; evidenceError = undefined; evidenceRequest++; }
   const cells = fenBoard(state.fen);
   const turnColor = state.sideToMove === 'black' || state.sideToMove === 'b' ? 'black' : 'white';
@@ -570,7 +660,10 @@ function render(next, { publish = true } = {}) {
   if (interactive) for (const move of state.legalMoves) { const destinations = dests.get(move.from) || []; if (!destinations.includes(move.to)) destinations.push(move.to); dests.set(move.from, destinations); }
   const snapshot = { sessionId: state.sessionId, revision: state.revision };
   const best = checkedGuide()?.line[0]?.uci;
-  const autoShapes = best ? [{ orig: best.slice(0, 2), dest: best.slice(2, 4), brush: 'green' }] : [];
+  const visualStep = visualLesson?.steps[Math.max(0,visualLesson.step-1)];
+  const arrow = visualLesson ? visualStep?.uci : best;
+  const autoShapes = arrow ? [{ orig: arrow.slice(0, 2), dest: arrow.slice(2, 4), brush: 'green' }] : [];
+  if (visualLesson?.step) for (const square of visualLesson.steps[visualLesson.step-1].focus || []) autoShapes.push({orig:square,brush:'yellow'});
   const boardConfig = {
     fen: state.fen, orientation: state.playerColor === 'black' ? 'black' : 'white', turnColor,
     // viewOnly cannot be changed through Chessground.set. Bind once, and gate
@@ -587,7 +680,7 @@ function render(next, { publish = true } = {}) {
   el('board').setAttribute('aria-label', `${turnColor === 'black' ? 'Black' : 'White'} to move, played ply ${state.selectedPly}${state.variation?.length ? ', variation' : ''}. Move a piece to ${state.retry ? 'retry this decision' : 'explore a variation'}. Use Keyboard moves to enter a move or read piece locations.`);
   el('side').textContent = `${turnColor === 'black' ? 'Black' : 'White'} to move`;
   el('board-instruction').textContent = state.retry ? 'Move a piece to try again' : 'Move a piece to explore';
-  el('position').textContent = state.retry ? `Retry move ${Math.ceil(state.retry.ply / 2)}` : state.variation?.length ? state.variation.join(' ') : state.selectedPly ? moveLabel(state.selectedPly, state.playedMoves?.[state.selectedPly - 1] || '') : 'Start position';
+  el('position').textContent = state.retry ? `Retry ${Math.ceil(state.retry.ply / 2)}` : state.variation?.length ? 'Exploring' : state.selectedPly ? `Move ${Math.ceil(state.selectedPly / 2)}` : 'Start';
   el('position').title = state.variation?.length ? `Variation from played ply ${state.selectedPly}: ${state.variation.join(' ')}` : '';
   el('previous').disabled = !state.variation?.length && navigationPly() === 0 || navigationBlocked();
   const totalPlies = state.totalPlies ?? state.playedMoves?.length;
@@ -625,7 +718,7 @@ function publishContext() {
       const snapshot = pendingContext;
       pendingContext = undefined;
       const request=coachingRequest && requestMatches(coachingRequest,snapshot) ? coachingRequest : undefined;
-      const instructions=request ? `\nCoaching request from this mount: ${request.requestId}, requested at ${request.requestedAt}. The next brief Explain message refers to this exact request. If multiple mounts have requests, resolve this explicit request; stop if concurrent requests are ambiguous. Read get_review_context for session ${request.sessionId} and require revision ${request.revision} and FEN ${request.fen} before explaining. If it changed, stop. Use checked position evidence and legal lines. Explain the move classification and one concrete better idea only when supported by checked evidence. Do not invent engine facts, change the board, start a retry, or change game scores. Then call publish_coaching_note with this sessionId and expectedRevision, with one idea and one concrete cue in plain language, at most 280 characters. Do not publish for a changed position. Keep the chat explanation short and useful.` : '';
+      const instructions=request ? `\nVisual coaching request from this mount: ${request.requestId}, requested at ${request.requestedAt}. The next brief Explain message refers to this exact request. Resolve this explicit request; stop if concurrent requests are ambiguous. Read get_review_context for session ${request.sessionId}; require revision ${request.revision} and FEN ${request.fen}. If it changed, stop. Read get_position_evidence and use its checkedContinuation. Call publish_coaching_visual with this sessionId and expectedRevision, a short title, and 1 to 4 steps whose moves are an exact prefix of checkedContinuation. Each label is at most 48 characters: a plain-language idea such as "Protect the pawn" or "Attack the queen". No chess notation, square names, or paragraphs in titles or labels. focus may highlight up to 4 occupied squares after that step. Cover the opponent's checked response and the useful consequence when available. Do not invent engine facts, change the board, start a retry, or change scores. The user controls playback. Do not publish a text coaching note. Keep the chat response to a brief confirmation that the visual steps are on the board; no notation lecture.` : '';
       const acknowledgement = await extensions.modelContext.update({
         content: [{ type: 'text', text: `Current chess review ${snapshot.sessionId}, revision ${snapshot.revision}, selected ply ${snapshot.selectedPly}. ${snapshot.summary || ''}\nFEN: ${snapshot.fen}\nUse semantic chess tools with this explicit session and revision.${instructions}` }],
         structuredContent: { ...snapshot, mountId,...(request ? {coachingRequest:request} : {}) },
@@ -734,7 +827,8 @@ async function mutate(name, args = {}, navigationCommit = false) {
       clearError();
       result = await issue();
     }
-    if (state.sessionId === sessionId && render(result.state || result)) { committed = state; if (intentDrawer && intentDrawer !== 'game-picker-title' && activeDrawer === intentDrawer) { closeDrawers(); el('position').focus(); } }
+    const returned = result.state || result;
+    if (state.sessionId === sessionId && render(returned)) { committed = state; if (intentDrawer && intentDrawer !== 'game-picker-title' && activeDrawer === intentDrawer) { closeDrawers(); el('position').focus(); } }
   } catch (error) { reportError(error); await sync(); }
   finally { manualInFlight = false; if (state) render(state, { publish: false }); }
   return committed;
@@ -770,6 +864,16 @@ el('show-better').addEventListener('click', () => {
 el('resume-played').addEventListener('click', () => { const ply = comparisonAnchor?.ply; comparisonAnchor = undefined; if (ply) void mutate('go_to_move', { ply }); });
 el('coach-return').addEventListener('click', () => { if (state?.variation?.length && !state.retry) void mutate('return_to_game'); });
 el('explain-move').addEventListener('click', () => void explainMove());
+el('visual-back').addEventListener('click',()=>void moveVisualStep(visualLesson.step-1));
+el('visual-play').addEventListener('click',()=>void moveVisualStep(visualLesson.step === visualLesson.steps.length ? 0 : visualLesson.step+1));
+el('visual-close').addEventListener('click',async()=>{
+  const lesson=visualLesson;
+  if (!lesson) return;
+  const committed=await moveVisualStep(0),anchor=visualPosition(lesson,0);
+  if (committed && visualLesson===lesson && committed.fen===anchor.fen && JSON.stringify(committed.variation)===JSON.stringify(anchor.variation)) {
+    dismissedVisual=lesson.id;visualLesson=undefined;render(state,{publish:false});
+  }
+});
 el('engine-toggle').addEventListener('click', () => { engineEnabled = !engineEnabled; if (state) render(state, { publish: false }); });
 el('engine-play').addEventListener('click', () => { const move = checkedGuide()?.line[0]?.uci; if (move && !state.retry) void mutate('show_variation', { moves: [...(state.variation || []), move] }); });
 el('analyze').addEventListener('click', () => void mutate('analyze_game'));
